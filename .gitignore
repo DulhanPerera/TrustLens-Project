@@ -191,6 +191,9 @@ cython_debug/
 # Ignore JS/Node dependencies
 node_modules/
 
+# OS files
+.DS_Store
+
 # Ruff stuff:
 .ruff_cache/
 
