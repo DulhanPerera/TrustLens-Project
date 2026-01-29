@@ -1,226 +1,212 @@
-import React, { useState, useMemo } from 'react';
-import { ShieldAlert, Activity, Database, Zap, ArrowRight, Settings, Code } from 'lucide-react';
+import React, { useState } from 'react';
+import { 
+  ShieldAlert, LayoutDashboard, Database, UserCheck, 
+  Zap, Clock, DollarSign, MessageSquareText, Activity, ArrowRight, Search, Filter
+} from 'lucide-react';
 import { useTransactionStore } from './store';
 import XAIChart from './components/XAIChart';
 import { getFraudPrediction } from './api';
 
-function App() {
+export default function App() {
   const { history, addTransaction } = useTransactionStore();
   const [loading, setLoading] = useState(false);
-  const [selectedTxId, setSelectedTxId] = useState(null);
-  const [threshold, setThreshold] = useState(0.5); // FR05: Configurable Threshold
-  const [apiDebug, setApiDebug] = useState({ request: null, response: null }); // Track API calls
-
-  // Get the chart data for the currently selected transaction
-  const activeChartData = useMemo(() => {
-    const selected = history.find(tx => tx.id === selectedTxId);
-    if (selected) return selected.chartData;
-    // Default/Fallback view
-    return history[0]?.chartData || [
-      { name: 'V14', impact: 0 }, { name: 'V17', impact: 0 }, { name: 'V12', impact: 0 }
-    ];
-  }, [selectedTxId, history]);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  
+  const latestTx = history[0];
 
   const handleAnalysis = async () => {
     setLoading(true);
-    const testData = { 
-      Time: Math.floor(Math.random() * 1000), 
-      V_features: Array(28).fill(0).map(() => (Math.random() - 0.5) * 5), 
-      Amount: (Math.random() * 200).toFixed(2) 
+    const inputData = { 
+      Time: Math.floor(Math.random() * 500), 
+      V_features: Array(28).fill(0).map(() => (Math.random() - 0.5) * 4), 
+      // Ensure Amount is a number (not a string)
+      Amount: parseFloat((Math.random() * 150).toFixed(2)) 
     };
     
-    // Store the request for debug display
-    setApiDebug({ request: testData, response: null });
-    
     try {
-      const result = await getFraudPrediction(testData);
-      
-      // Store the response for debug display
-      setApiDebug(prev => ({ ...prev, response: result }));
-      
-      // Dynamic Chart Data Mapping
-      // In production, your backend should ideally return SHAP values directly
-      const chartData = [
-        { name: 'V14', impact: result.is_fraud ? (Math.random() * 0.5 + 0.4) : (Math.random() * 0.2) },
-        { name: 'V17', impact: result.is_fraud ? (Math.random() * 0.5 + 0.3) : (Math.random() * 0.2) },
-        { name: 'V12', impact: (Math.random() - 0.5) * 0.4 },
-        { name: 'Amt', impact: testData.Amount > 150 ? 0.3 : -0.1 }
-      ];
+      const response = await getFraudPrediction(inputData);
+      const chartData = response.xai_data || [];
 
-      const newTx = { 
-        ...result, 
+      addTransaction({ 
+        ...response, 
+        ...inputData,
         id: Date.now(), 
-        time: new Date().toLocaleTimeString(),
-        amount: testData.Amount,
-        chartData: chartData 
-      };
-
-      addTransaction(newTx);
-      setSelectedTxId(newTx.id); // Automatically focus the newest scan
+        time_captured: new Date().toLocaleTimeString(), 
+        chartData 
+      });
+      setActiveTab('dashboard');
     } catch (err) {
-      console.error("Integration Error:", err);
+      console.error("API Error:", err);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex bg-slate-50 font-sans" style={{ minHeight: '100vh', display: 'flex', backgroundColor: '#f8fafc' }}>
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-white p-6 hidden md:flex flex-col border-r border-slate-800">
-        <div className="flex items-center gap-2 mb-10 text-blue-400">
-          <ShieldAlert size={32} />
-          <span className="text-xl font-bold text-white tracking-tight">TrustLens</span>
+    <div className="min-h-screen bg-slate-50 flex font-sans">
+      
+      {/* 1. SIDEBAR NAVIGATION */}
+      <aside className="w-64 bg-slate-900 text-white fixed h-full z-20 shadow-xl flex flex-col">
+        <div className="p-5 flex items-center gap-2 border-b border-slate-800">
+          <ShieldAlert className="text-blue-400" size={24} />
+          <span className="text-lg font-black uppercase tracking-tight">TrustLens</span>
         </div>
-        <nav className="space-y-2 flex-1">
-          <div className="flex items-center gap-3 p-3 bg-blue-600/20 text-blue-400 rounded-xl cursor-pointer">
-            <Activity size={20} /> Dashboard
-          </div>
-          <div className="flex items-center gap-3 p-3 text-slate-400 hover:text-white transition rounded-xl cursor-pointer">
-            <Database size={20} /> Audit Logs
-          </div>
+        
+        <nav className="p-3 flex-1 space-y-1 mt-2">
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}
+          >
+            <LayoutDashboard size={18} /> <span className="text-sm font-bold">Monitor</span>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('logs')} 
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition ${activeTab === 'logs' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}
+          >
+            <Database size={18} /> <span className="text-sm font-bold">Audit Logs</span>
+          </button>
+
+          <a href="/admin" className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-slate-400 hover:bg-slate-800 transition">
+            <UserCheck size={18} /> <span className="text-sm font-bold">Admin Panel</span>
+          </a>
         </nav>
-        <div className="bg-slate-800/50 p-4 rounded-xl mb-4">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 mb-2 uppercase">
-                <Settings size={14} /> Threshold (FR05)
-            </div>
-            <input 
-                type="range" min="0" max="1" step="0.1" value={threshold} 
-                onChange={(e) => setThreshold(e.target.value)}
-                className="w-full accent-blue-500"
-            />
-            <div className="text-right text-xs text-blue-400 font-bold mt-1">{threshold * 100}% Risk</div>
+
+        <div className="p-5 border-t border-slate-800">
+          <p className="text-[9px] text-slate-600 font-bold uppercase italic text-center">v2.3 | Full-Width Edition</p>
         </div>
       </aside>
 
-      {/* Main Panel */}
-      <main className="flex-1 p-8 overflow-y-auto">
-        <div className="max-w-6xl mx-auto">
-          <header className="flex justify-between items-center mb-8">
-            <div>
-              <h1 className="text-3xl font-extrabold text-slate-800">Fraud Analysis</h1>
-              <p className="text-slate-500">Real-time Deep Learning Monitoring</p>
-            </div>
-            <button 
-              onClick={handleAnalysis}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-all flex items-center gap-2 active:scale-95"
-            >
-              <Zap size={18} fill="currentColor" />
-              {loading ? "Analyzing..." : "Trigger Scan"}
-            </button>
-          </header>
+      {/* 2. MAIN CONTENT AREA - Now set to full width */}
+      <main className="flex-1 ml-64 p-8 w-full overflow-x-hidden">
+        
+        {/* PAGE 1: MONITORING DASHBOARD */}
+        {activeTab === 'dashboard' && (
+          <div className="w-full space-y-6 animate-in fade-in duration-500">
+            <header className="flex justify-between items-center mb-8 border-b border-slate-200 pb-5">
+              <div>
+                <h1 className="text-3xl font-black text-slate-800 tracking-tight">Real-time Monitor</h1>
+                <p className="text-slate-500 text-sm font-medium">Deep Learning Fraud Detection Intelligence</p>
+              </div>
+              <button 
+                onClick={handleAnalysis} 
+                disabled={loading} 
+                className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-blue-700 transition flex items-center gap-2 active:scale-95"
+              >
+                <Zap size={18} fill="currentColor" />
+                {loading ? "Analyzing..." : "Trigger Live Scan"}
+              </button>
+            </header>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Chart Area */}
-            <div className="lg:col-span-2 space-y-8">
-              <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-700">
-                  <Activity size={20} className="text-blue-500" /> XAI Interpretation (UC-12)
-                </h2>
-                <XAIChart explanationData={activeChartData} />
-                <p className="mt-4 text-xs text-slate-400 italic text-center">
-                    Visualizing SHAP feature importance for Transaction ID: {selectedTxId || 'None'}
-                </p>
-              </section>
-
-              {/* API Debug Panel */}
-              {apiDebug.request && (
-                <section className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-700">
-                  <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-white">
-                    <Code size={20} className="text-green-400" /> API Request/Response
-                  </h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {!latestTx ? (
+              <div className="w-full bg-white border-2 border-dashed border-slate-200 rounded-[2rem] p-24 flex flex-col items-center justify-center text-slate-300">
+                <Activity size={64} className="mb-4 animate-pulse" />
+                <h2 className="text-xl font-black uppercase tracking-widest">System Ready</h2>
+              </div>
+            ) : (
+              <div className="w-full space-y-6">
+                
+                {/* Status Card (Stretches Full Width) */}
+                <section className={`w-full p-8 rounded-[2rem] shadow-lg flex items-center justify-between text-white border-b-4 ${latestTx.is_fraud ? 'bg-red-600 border-red-800' : 'bg-green-600 border-green-800'}`}>
+                  <div className="flex items-center gap-6">
+                    <ShieldAlert size={56} className="bg-white/20 p-3 rounded-full shadow-inner" />
                     <div>
-                      <h3 className="text-xs font-bold text-green-400 mb-2 uppercase">→ Request (POST /predict)</h3>
-                      <pre className="bg-slate-800 p-3 rounded-lg text-xs text-slate-300 overflow-auto max-h-48">
-{JSON.stringify(apiDebug.request, null, 2)}
-                      </pre>
+                      <h2 className="text-5xl font-black italic uppercase leading-none tracking-tighter">{latestTx.status}</h2>
+                      <p className="text-xs font-black opacity-80 uppercase mt-2 tracking-widest">Model Confidence: {latestTx.risk_score}%</p>
                     </div>
-                    <div>
-                      <h3 className="text-xs font-bold text-blue-400 mb-2 uppercase">← Response</h3>
-                      <pre className="bg-slate-800 p-3 rounded-lg text-xs text-slate-300 overflow-auto max-h-48">
-{apiDebug.response ? JSON.stringify(apiDebug.response, null, 2) : 'Loading...'}
-                      </pre>
+                  </div>
+                  <div className="text-right bg-black/10 px-6 py-3 rounded-2xl border border-white/10">
+                    <p className="text-white/60 text-[10px] font-black uppercase tracking-widest">Captured Amount</p>
+                    <p className="text-4xl font-black font-mono leading-none">${latestTx.Amount}</p>
+                  </div>
+                </section>
+
+                {/* Vertical XAI Interpretation Area (Full Width) */}
+                <section className="bg-white p-10 rounded-[2rem] shadow-sm border border-slate-200 w-full">
+                  <div className="flex justify-between items-center mb-10">
+                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                      <MessageSquareText size={16} className="text-blue-500" /> Explainable AI (XAI) Focus Area
+                    </h3>
+                    <div className="flex gap-2">
+                       <span className="text-[9px] font-bold bg-blue-50 text-blue-600 px-3 py-1 rounded-lg uppercase">Requirement UC-12</span>
+                       <span className="text-[9px] font-bold bg-slate-50 text-slate-400 px-3 py-1 rounded-lg uppercase">SHAP Explainer</span>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-12">
+                    {/* Part 1: Textual Explanation */}
+                    <div className="space-y-6">
+                      <p className="text-3xl font-extrabold text-slate-800 border-l-[12px] border-blue-500 pl-8 leading-[1.15]">
+                        {latestTx.explanation}
+                      </p>
+                      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 text-base text-slate-600 font-medium leading-relaxed">
+                        The neural network flagged this transaction due to extreme variance in 
+                        latent PCA components. These specific features correlate with high-risk merchant 
+                        categories and abnormal geolocation shifts. This interpretability allows human 
+                        analysts to verify the "Black Box" decision.
+                      </div>
+                    </div>
+
+                    {/* Part 2: Feature Graph (Now stretches horizontally) */}
+                    <div className="pt-10 border-t border-slate-100">
+                       <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">SHAP Feature Contribution Analysis</h4>
+                       <div className="bg-slate-50/50 p-8 rounded-[2rem] border border-slate-100">
+                          <XAIChart explanationData={latestTx.chartData} />
+                       </div>
+                       <p className="text-[11px] text-slate-400 mt-6 italic text-center italic font-medium">
+                         * Visualizing the mathematical weight of each feature on the model's final fraud prediction.
+                       </p>
                     </div>
                   </div>
                 </section>
-              )}
-
-              {/* Audit Table (UC-16) */}
-              <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-700">
-                  <Database size={20} className="text-slate-400" /> System Audit Logs
-                </h2>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold">
-                            <tr>
-                                <th className="px-4 py-3">Timestamp</th>
-                                <th className="px-4 py-3">Amount</th>
-                                <th className="px-4 py-3">Result</th>
-                                <th className="px-4 py-3">Risk Score</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {history.map((tx) => (
-                                <tr key={tx.id} className="hover:bg-slate-50/50 transition">
-                                    <td className="px-4 py-3 font-mono text-xs">{tx.time}</td>
-                                    <td className="px-4 py-3 text-slate-600">${tx.amount}</td>
-                                    <td className={`px-4 py-3 font-bold ${tx.is_fraud ? 'text-red-500' : 'text-green-500'}`}>
-                                        {tx.status}
-                                    </td>
-                                    <td className="px-4 py-3 text-slate-400">{tx.risk_score}%</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-              </section>
-            </div>
-
-            {/* Live Feed (UC-11) */}
-            <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-[700px] flex flex-col">
-              <h2 className="text-lg font-bold mb-4">Live Alert Feed</h2>
-              <div className="space-y-4 overflow-y-auto flex-1 pr-2">
-                {history.length === 0 && (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-300 gap-2">
-                        <Activity size={48} strokeWidth={1} />
-                        <p className="text-sm italic">Listening for transactions...</p>
-                    </div>
-                )}
-                {history.map((tx) => (
-                  <div 
-                    key={tx.id} 
-                    onClick={() => setSelectedTxId(tx.id)}
-                    className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                        selectedTxId === tx.id 
-                        ? 'border-blue-500 bg-blue-50/30' 
-                        : 'border-transparent bg-slate-50 hover:border-slate-200'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${tx.is_fraud ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`}>
-                        {tx.status}
-                      </span>
-                      <span className="text-[10px] text-slate-400 font-mono">{tx.time}</span>
-                    </div>
-                    <div className="flex justify-between items-end">
-                        <div>
-                            <p className="text-sm font-bold text-slate-700">Risk: {tx.risk_score}%</p>
-                            <p className="text-[10px] text-slate-400">Amt: ${tx.amount}</p>
-                        </div>
-                        <ArrowRight size={14} className={selectedTxId === tx.id ? 'text-blue-500' : 'text-slate-300'} />
-                    </div>
-                  </div>
-                ))}
               </div>
-            </section>
+            )}
           </div>
-        </div>
+        )}
+
+        {/* PAGE 2: AUDIT LOGS (FULL WIDTH) */}
+        {activeTab === 'logs' && (
+          <div className="w-full space-y-6 animate-in slide-in-from-right-4 duration-500">
+            <header className="mb-8 border-b border-slate-200 pb-5">
+              <h1 className="text-3xl font-black text-slate-800 tracking-tight">Audit Archive</h1>
+              <p className="text-slate-500 text-sm font-medium tracking-tight">Session History & Transaction Forensic Log (UC-16)</p>
+            </header>
+
+            <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden w-full">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-400 uppercase text-[10px] font-black border-b">
+                  <tr>
+                    <th className="px-10 py-5">Timestamp</th>
+                    <th className="px-10 py-5">Transaction Amount</th>
+                    <th className="px-10 py-5 text-center">System Status</th>
+                    <th className="px-10 py-5 text-right">Confidence Score</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm font-medium">
+                  {history.length === 0 ? (
+                    <tr><td colSpan="4" className="px-10 py-24 text-center text-slate-300 italic font-bold">No logs found for current monitoring session.</td></tr>
+                  ) : (
+                    history.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-blue-50/40 transition duration-300 group">
+                        <td className="px-10 py-5 font-mono text-xs text-slate-400 group-hover:text-blue-600 transition-colors font-bold">{tx.time_captured}</td>
+                        <td className="px-10 py-5 text-slate-800 font-black text-base">${tx.Amount}</td>
+                        <td className="px-10 py-5 text-center">
+                          <span className={`px-4 py-1 rounded-full text-[10px] font-black uppercase shadow-sm border ${tx.is_fraud ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
+                            {tx.status}
+                          </span>
+                        </td>
+                        <td className="px-10 py-5 text-right font-mono text-slate-400 group-hover:text-slate-900 transition-all font-black">
+                          {tx.risk_score}% <ArrowRight size={14} className="inline ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
 }
-
-export default App;
