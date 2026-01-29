@@ -13,7 +13,7 @@ app = FastAPI(title="TrustLens API", description="Real-time Fraud Detection with
 # Security: CORS configuration for React [cite: 214]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Restrict to React dev port
+    allow_origins=["http://localhost:5173"], # Restrict to React dev port
     allow_methods=["*"],
     allow_headers=["*"],
 )
