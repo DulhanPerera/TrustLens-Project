@@ -16,12 +16,32 @@ export default function App() {
 
   const handleAnalysis = async () => {
     setLoading(true);
-    const inputData = { 
-      Time: Math.floor(Math.random() * 500), 
-      V_features: Array(28).fill(0).map(() => (Math.random() - 0.5) * 4), 
-      // Ensure Amount is a number (not a string)
-      Amount: parseFloat((Math.random() * 150).toFixed(2)) 
-    };
+    
+    // Randomly decide if this should simulate a fraudulent transaction (30% chance)
+    const simulateFraud = Math.random() < 0.3;
+    
+    let inputData;
+    if (simulateFraud) {
+      // Generate fraud-like transaction with extreme/anomalous values
+      inputData = {
+        Time: Math.floor(Math.random() * 500),
+        V_features: Array(28).fill(0).map((_, i) => {
+          // V14, V12, V10, V4 are typically strong fraud indicators
+          if ([3, 9, 11, 13].includes(i)) {
+            return (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 5 + 3); // Extreme values (-8 to -3 or 3 to 8)
+          }
+          return (Math.random() - 0.5) * 6; // More variance for other features
+        }),
+        Amount: parseFloat((Math.random() * 2000 + 500).toFixed(2)) // Higher amounts (500-2500)
+      };
+    } else {
+      // Generate normal/legitimate transaction
+      inputData = { 
+        Time: Math.floor(Math.random() * 500), 
+        V_features: Array(28).fill(0).map(() => (Math.random() - 0.5) * 2), // Smaller variance
+        Amount: parseFloat((Math.random() * 150).toFixed(2)) // Normal amounts
+      };
+    }
     
     try {
       const response = await getFraudPrediction(inputData);
