@@ -8,6 +8,9 @@ Put these files in the SAME folder as this app.py (backend/):
   - isotonic_calibrator.joblib   (optional)
   - thresholds.json              (optional)
 
+OPTIONAL (recommended for more meaningful SHAP):
+  - shap_background.npy          (recommended; real NORMAL samples after scaling)
+
 Run:
   pip install -r requirements.txt
   uvicorn app:app --host 0.0.0.0 --port 8000 --reload
@@ -53,6 +56,10 @@ THRESHOLDS_PATH = Path(os.getenv("THRESHOLDS_PATH", str(DEFAULT_THRESHOLDS)))
 ALT_MLP = [BASE_DIR / "mlp_best.keras", BASE_DIR / "trustlens_model.keras"]
 ALT_AE = [BASE_DIR / "ae_best.keras"]
 ALT_SCALER = [BASE_DIR / "preprocess_artifacts.pkl"]  # legacy dict option
+
+# ✅ NEW: Preferred SHAP background file (real normal samples AFTER scaling)
+SHAP_BG_PATH = Path(os.getenv("SHAP_BG_PATH", str(BASE_DIR / "shap_background.npy")))
+SHAP_BG_MAX = int(os.getenv("SHAP_BG_MAX", "500"))
 
 LOG_PATH = BASE_DIR / "trustlens_audit.log"
 
@@ -111,9 +118,11 @@ def _first_existing(primary: Path, alts: List[Path]) -> Optional[Path]:
 def _to_prob(pred: np.ndarray) -> float:
     pred = np.array(pred)
 
+    # softmax (1,2)
     if pred.ndim == 2 and pred.shape[1] == 2:
         return float(pred[0, 1])
 
+    # sigmoid (1,1) or logits
     val = float(pred.reshape(-1)[0])
     if val < 0.0 or val > 1.0:
         return float(tf.sigmoid(val).numpy())
@@ -153,7 +162,7 @@ class Transaction(BaseModel):
 
 class BatchRequest(BaseModel):
     transactions: List[Transaction] = Field(..., min_items=50, max_items=500)
-    include_xai: bool = False
+    include_xai: bool = False  # batch XAI is heavy; default off
     top_k: int = Field(4, ge=1, le=15)
 
 
@@ -207,6 +216,8 @@ def load_assets():
         if scaler_path is None:
             raise FileNotFoundError(f"Scaler not found. Tried: {SCALER_PATH} + {ALT_SCALER}")
 
+        shap_background_from_artifacts = None
+
         if scaler_path.name.endswith(".pkl"):
             artifacts = joblib.load(str(scaler_path))
             if not isinstance(artifacts, dict):
@@ -226,26 +237,49 @@ def load_assets():
                     return np.concatenate([t, mid, a], axis=1).astype(np.float32)
 
             scaler = _LegacyScalerWrapper()
-            shap_background = artifacts.get("background", None)
+            shap_background_from_artifacts = artifacts.get("background", None)
         else:
             scaler = joblib.load(str(scaler_path))
-            shap_background = None
 
         calibrator = joblib.load(str(CALIBRATOR_PATH)) if CALIBRATOR_PATH.exists() else None
 
+        # -----------------------------
+        # ✅ Improved SHAP initialization
+        # -----------------------------
         enable_shap = os.getenv("ENABLE_SHAP", "1") == "1"
         if enable_shap:
             try:
-                import shap
+                import shap  # local import so API runs even without shap installed
 
-                if shap_background is None:
-                    bg = np.zeros((10, 30), dtype=np.float32)
-                else:
-                    bg = np.array(shap_background, dtype=np.float32)
+                bg_source = "zeros"
+
+                # 1) Prefer shap_background.npy (recommended: real NORMAL samples AFTER scaling)
+                if SHAP_BG_PATH.exists():
+                    bg = np.load(str(SHAP_BG_PATH)).astype(np.float32)
+                    if bg.ndim != 2 or bg.shape[1] != 30:
+                        raise ValueError(f"Invalid shap_background.npy shape: {bg.shape} (expected (N,30))")
+                    if bg.shape[0] > SHAP_BG_MAX:
+                        bg = bg[:SHAP_BG_MAX]
+                    bg_source = f"file:{SHAP_BG_PATH.name}"
+
+                # 2) Else use legacy artifacts background if present (assumed already scaled)
+                elif shap_background_from_artifacts is not None:
+                    bg = np.array(shap_background_from_artifacts, dtype=np.float32)
                     if bg.ndim != 2 or bg.shape[1] != 30:
                         bg = np.zeros((10, 30), dtype=np.float32)
+                        bg_source = "zeros(fallback_bad_artifacts_bg)"
+                    else:
+                        if bg.shape[0] > SHAP_BG_MAX:
+                            bg = bg[:SHAP_BG_MAX]
+                        bg_source = "artifacts:background"
+
+                # 3) Else fallback (least meaningful)
+                else:
+                    bg = np.zeros((10, 30), dtype=np.float32)
 
                 shap_explainer = shap.DeepExplainer(mlp_model, bg)
+                logging.info(f"SHAP initialized. background_source={bg_source} shape={tuple(bg.shape)}")
+
             except Exception as e:
                 shap_explainer = None
                 logging.warning(f"SHAP init failed (API still works): {e}")
@@ -264,43 +298,111 @@ def load_assets():
 
 
 # ---------------------------------------------------------------------
-# XAI helpers
+# XAI helpers (Improved SHAP)
 # ---------------------------------------------------------------------
-def _xai_shap(x_scaled: np.ndarray, top_k: int) -> List[Dict[str, float]]:
+def _xai_shap(
+    x_scaled: np.ndarray,
+    x_raw: np.ndarray,
+    top_k: int,
+    output_is_fraud: bool,
+) -> List[Dict[str, Any]]:
+    """
+    More meaningful SHAP output:
+      - uses signed SHAP values (direction: increase/decrease fraud risk)
+      - includes raw + scaled feature values
+      - ensures '+' means increases fraud risk (if model outputs P(normal), sign is flipped)
+
+    Note: On this dataset V1..V28 are PCA components, so they won't map to real-world semantics,
+    but the "increase/decrease" and values still make the explanation clearer.
+    """
     if shap_explainer is None:
         return []
+
     try:
         shap_values = shap_explainer.shap_values(x_scaled)
-        if isinstance(shap_values, list):
-            vals = np.abs(np.array(shap_values[0]).reshape(-1))
-        else:
-            vals = np.abs(np.array(shap_values).reshape(-1))
 
-        fn = feature_names if len(feature_names) == len(vals) else (
-            ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
-        )
-        idx = np.argsort(vals)[-top_k:][::-1]
-        return [{"name": fn[i], "impact": float(vals[i])} for i in idx]
+        # signed SHAP values
+        if isinstance(shap_values, list):
+            vals = np.array(shap_values[0]).reshape(-1)
+        else:
+            vals = np.array(shap_values).reshape(-1)
+
+        # Ensure "+" means "fraud risk increases"
+        if not output_is_fraud:
+            vals = -vals
+
+        abs_vals = np.abs(vals)
+
+        fn = feature_names if len(feature_names) == len(vals) else (["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"])
+        x_raw_1d = np.array(x_raw, dtype=np.float32).reshape(-1)
+        x_scaled_1d = np.array(x_scaled, dtype=np.float32).reshape(-1)
+
+        idx = np.argsort(abs_vals)[-top_k:][::-1]
+
+        out: List[Dict[str, Any]] = []
+        for i in idx:
+            s = float(vals[i])
+            out.append(
+                {
+                    "name": fn[i],
+                    "impact": float(abs_vals[i]),
+                    "signed": s,
+                    "direction": "increase" if s > 0 else "decrease",
+                    "value_raw": float(x_raw_1d[i]),
+                    "value_scaled": float(x_scaled_1d[i]),
+                }
+            )
+        return out
+
     except Exception as e:
         logging.warning(f"SHAP compute failed: {e}")
         return []
 
 
-def _xai_recon_pf(x_scaled_row: np.ndarray, x_hat_row: np.ndarray, top_k: int) -> List[Dict[str, float]]:
+def _xai_recon_pf(x_scaled_row: np.ndarray, x_hat_row: np.ndarray, top_k: int) -> List[Dict[str, Any]]:
     errs = _per_feature_sq_error(x_scaled_row, x_hat_row)
-    fn = feature_names if len(feature_names) == len(errs) else (
-        ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
-    )
+    fn = feature_names if len(feature_names) == len(errs) else (["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"])
     idx = np.argsort(errs)[-top_k:][::-1]
     return [{"name": fn[i], "impact": float(errs[i])} for i in idx]
 
 
-def _build_text_reason(shap_top: List[Dict[str, float]], recon_top: List[Dict[str, float]]) -> str:
-    parts = []
+def _build_text_reason(
+    shap_top: List[Dict[str, Any]],
+    recon_top: List[Dict[str, Any]],
+    time_value: Optional[float] = None,
+    amount_value: Optional[float] = None,
+) -> str:
+    """
+    Text explanation that:
+      - ALWAYS mentions Time + Amount
+      - Summarizes SHAP direction: fraud risk ↑ / ↓
+      - Adds anomaly drivers from reconstruction error
+    """
+    parts: List[str] = []
+
+    # Always show Time/Amount context
+    ctx: List[str] = []
+    if time_value is not None:
+        ctx.append(f"Time={float(time_value):.0f}")
+    if amount_value is not None:
+        ctx.append(f"Amount={float(amount_value):.2f}")
+    if ctx:
+        parts.append(", ".join(ctx))
+
+    # Directional SHAP summary
     if shap_top:
-        parts.append("MLP drivers: " + ", ".join([d["name"] for d in shap_top[:2]]))
+        inc = [d["name"] for d in shap_top if float(d.get("signed", 0.0)) > 0][:2]
+        dec = [d["name"] for d in shap_top if float(d.get("signed", 0.0)) < 0][:2]
+
+        if inc:
+            parts.append("Fraud risk ↑ mainly due to " + ", ".join(inc))
+        if dec:
+            parts.append("Fraud risk ↓ mainly due to " + ", ".join(dec))
+
+    # AE anomaly drivers
     if recon_top:
         parts.append("Anomaly drivers: " + ", ".join([d["name"] for d in recon_top[:2]]))
+
     return " | ".join(parts) if parts else "Transaction scored using probability + anomaly score."
 
 
@@ -319,6 +421,7 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
 
         x_scaled = scaler.transform(x_raw).astype(np.float32)
 
+        # MLP predict
         try:
             input_name = mlp_model.input_names[0]
             raw_pred = mlp_model.predict({input_name: x_scaled}, verbose=0)
@@ -330,21 +433,23 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
         output_is_fraud = os.getenv("MODEL_OUTPUT_IS_FRAUD", "1") == "1"
         p_fraud = p_raw if output_is_fraud else (1.0 - p_raw)
 
+        # calibration optional
         if calibrator is not None:
             p_fraud = float(calibrator.transform([p_fraud])[0])
         else:
             p_fraud = float(p_fraud)
 
+        # AE
         x_hat = _ae_recon(ae_model, x_scaled)
         re_err = float(_recon_error_mse(x_scaled, x_hat)[0])
 
         thr_re = float(thresholds.get("ae_thr_val_norm_99.5pct", os.getenv("AE_THR", "0.01")))
         anomaly_score = _anomaly_score_fallback(re_err, thr_re)
 
+        # Combine
         w = thresholds.get("weights", {"w_mlp": 0.6, "w_ae": 0.4})
         w_mlp = float(w.get("w_mlp", 0.6))
         w_ae = float(w.get("w_ae", 0.4))
-
         combined_score = float(w_mlp * p_fraud + w_ae * anomaly_score)
 
         combined_thr = thresholds.get("combined_thr_val_maxf1", {}).get("thr", None)
@@ -352,10 +457,17 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
 
         is_fraud = combined_score >= combined_thr
 
+        # XAI (single)
         top_k = int(tx.top_k)
-        shap_data = _xai_shap(x_scaled, top_k) if tx.include_xai else []
+        shap_data = (
+            _xai_shap(x_scaled, x_raw, top_k=top_k, output_is_fraud=output_is_fraud)
+            if tx.include_xai else []
+        )
         recon_data = _xai_recon_pf(x_scaled[0], x_hat[0], top_k) if tx.include_xai else []
-        explanation = _build_text_reason(shap_data, recon_data) if tx.include_xai else "Scored using probability + anomaly."
+        explanation = (
+            _build_text_reason(shap_data, recon_data, time_value=tx.Time, amount_value=tx.Amount)
+            if tx.include_xai else f"Time={tx.Time:.0f}, Amount={tx.Amount:.2f} | Scored using probability + anomaly."
+        )
 
         if is_fraud:
             background_tasks.add_task(
@@ -364,26 +476,30 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
             )
 
         logging.info(
-            f"predict: p_raw={p_raw:.6f} p_fraud={p_fraud:.6f} re={re_err:.6f} anom={anomaly_score:.6f} combined={combined_score:.6f} is_fraud={is_fraud}"
+            f"predict: p_raw={p_raw:.6f} p_fraud={p_fraud:.6f} re={re_err:.6f} "
+            f"anom={anomaly_score:.6f} combined={combined_score:.6f} is_fraud={is_fraud}"
         )
 
         return {
             "is_fraud": bool(is_fraud),
             "status": "BLOCKED" if is_fraud else "APPROVED",
             "risk_score": round(combined_score * 100.0, 2),
+
             "mlp_prob_raw": float(p_raw),
             "fraud_prob": float(p_fraud),
             "recon_error": float(re_err),
             "anomaly_score": float(anomaly_score),
             "combined_score": float(combined_score),
+
             "thresholds": {
                 "combined_thr": combined_thr,
                 "ae_thr": thr_re,
                 "weights": {"w_mlp": w_mlp, "w_ae": w_ae},
                 "model_output_is_fraud": output_is_fraud,
             },
+
             "explanation": explanation,
-            "xai_data": shap_data,
+            "xai_data": shap_data,         # now includes signed + direction + values
             "ae_xai_data": recon_data,
         }
 
@@ -393,7 +509,7 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
 
 
 # ---------------------------------------------------------------------
-# Predict Batch endpoint (50–500)
+# Predict Batch endpoint (50–500) (ranked by risk_score)
 # ---------------------------------------------------------------------
 @app.post("/predict_batch")
 async def predict_batch(req: BatchRequest):
@@ -411,6 +527,7 @@ async def predict_batch(req: BatchRequest):
 
         X_scaled = scaler.transform(X_raw).astype(np.float32)
 
+        # MLP predict (vectorized)
         try:
             input_name = mlp_model.input_names[0]
             raw_pred = mlp_model.predict({input_name: X_scaled}, verbose=0)
@@ -419,6 +536,7 @@ async def predict_batch(req: BatchRequest):
 
         raw_pred = np.array(raw_pred)
 
+        # probs
         if raw_pred.ndim == 2 and raw_pred.shape[1] == 2:
             p_raw = raw_pred[:, 1].astype(np.float32)
         else:
@@ -435,6 +553,7 @@ async def predict_batch(req: BatchRequest):
         if calibrator is not None:
             p_fraud = calibrator.transform(p_fraud.tolist()).astype(np.float32)
 
+        # AE recon
         X_hat = ae_model.predict(X_scaled, verbose=0)
         re_err = np.mean(np.square(X_scaled - X_hat), axis=1).astype(np.float32)
 
@@ -447,7 +566,6 @@ async def predict_batch(req: BatchRequest):
         w = thresholds.get("weights", {"w_mlp": 0.6, "w_ae": 0.4})
         w_mlp = float(w.get("w_mlp", 0.6))
         w_ae = float(w.get("w_ae", 0.4))
-
         combined = (w_mlp * p_fraud + w_ae * anomaly_score).astype(np.float32)
 
         combined_thr = thresholds.get("combined_thr_val_maxf1", {}).get("thr", None)
@@ -468,15 +586,27 @@ async def predict_batch(req: BatchRequest):
                 "combined_score": float(combined[i]),
             }
 
+            # Optional per-row explanations (slow)
             if do_xai:
-                shap_data = _xai_shap(X_scaled[i:i + 1], top_k=top_k)
+                shap_data = _xai_shap(
+                    X_scaled[i:i + 1],
+                    X_raw[i:i + 1],
+                    top_k=top_k,
+                    output_is_fraud=output_is_fraud,
+                )
                 recon_data = _xai_recon_pf(X_scaled[i], X_hat[i], top_k=top_k)
                 item["xai_data"] = shap_data
                 item["ae_xai_data"] = recon_data
-                item["explanation"] = _build_text_reason(shap_data, recon_data)
+                item["explanation"] = _build_text_reason(
+                    shap_data,
+                    recon_data,
+                    time_value=float(txs[i].Time),
+                    amount_value=float(txs[i].Amount),
+                )
 
             results.append(item)
 
+        # Rank by risk_score desc
         results.sort(key=lambda x: x["risk_score"], reverse=True)
 
         return {
@@ -497,18 +627,10 @@ async def predict_batch(req: BatchRequest):
 
 
 # ---------------------------------------------------------------------
-# NEW: Report endpoint (TrustLens card)
+# Report endpoint (TrustLens card)
 # ---------------------------------------------------------------------
 @app.post("/report")
 async def report(req: ReportRequest):
-    """
-    TrustLens report card for one transaction.
-    Returns:
-      - decision: APPROVED / REVIEW / BLOCKED
-      - signals: MLP prob, AE recon error, anomaly score, combined score
-      - explanations: top SHAP + top recon-error features
-      - metadata: thresholds, weights, timestamp
-    """
     if mlp_model is None or ae_model is None or scaler is None:
         raise HTTPException(status_code=503, detail=f"Model not ready: {last_init_error or 'unknown error'}")
 
@@ -519,7 +641,7 @@ async def report(req: ReportRequest):
 
         x_scaled = scaler.transform(x_raw).astype(np.float32)
 
-        # MLP prediction
+        # MLP
         try:
             input_name = mlp_model.input_names[0]
             raw_pred = mlp_model.predict({input_name: x_scaled}, verbose=0)
@@ -552,7 +674,7 @@ async def report(req: ReportRequest):
         combined_thr = thresholds.get("combined_thr_val_maxf1", {}).get("thr", None)
         combined_thr = float(combined_thr) if combined_thr is not None else float(os.getenv("COMBINED_THR", "0.5"))
 
-        # 3-level decision (adds realism)
+        # 3-level decision
         review_margin = float(os.getenv("REVIEW_MARGIN", "0.05"))
         if combined_score >= combined_thr:
             decision = "BLOCKED"
@@ -561,18 +683,28 @@ async def report(req: ReportRequest):
         else:
             decision = "APPROVED"
 
-        # XAI
         top_k = int(req.top_k)
 
-        shap_data = []
+        # XAI
+        shap_data: List[Dict[str, Any]] = []
         if req.include_shap and shap_explainer is not None:
-            shap_data = _xai_shap(x_scaled, top_k=top_k)
+            shap_data = _xai_shap(
+                x_scaled,
+                x_raw,
+                top_k=top_k,
+                output_is_fraud=output_is_fraud,
+            )
 
-        recon_data = []
+        recon_data: List[Dict[str, Any]] = []
         if req.include_recon:
             recon_data = _xai_recon_pf(x_scaled[0], x_hat[0], top_k=top_k)
 
-        summary = _build_text_reason(shap_data, recon_data)
+        summary = _build_text_reason(
+            shap_data,
+            recon_data,
+            time_value=req.Time,
+            amount_value=req.Amount,
+        )
 
         # Confidence heuristic: distance from threshold (0..1)
         dist = abs(combined_score - combined_thr)
@@ -598,7 +730,7 @@ async def report(req: ReportRequest):
             },
             "explanations": {
                 "summary": summary,
-                "shap_top": shap_data,
+                "shap_top": shap_data,       # signed + direction + values
                 "recon_top": recon_data,
             },
             "meta": {
@@ -610,6 +742,8 @@ async def report(req: ReportRequest):
                 "xai": {
                     "shap_available": shap_explainer is not None,
                     "feature_names_len": len(feature_names),
+                    "shap_bg_path": str(SHAP_BG_PATH),
+                    "shap_bg_max": SHAP_BG_MAX,
                 },
             },
         }
@@ -647,6 +781,7 @@ def health():
             "calibrator_path": str(CALIBRATOR_PATH),
             "thresholds_path": str(THRESHOLDS_PATH),
             "log_path": str(LOG_PATH),
+            "shap_bg_path": str(SHAP_BG_PATH),
         },
         "model_info": {
             "mlp_output_shape": getattr(mlp_model, "output_shape", None) if mlp_model else None,
@@ -659,6 +794,8 @@ def health():
             "COMBINED_THR": os.getenv("COMBINED_THR", "(using thresholds.json if present)"),
             "AE_THR": os.getenv("AE_THR", "(using thresholds.json if present)"),
             "REVIEW_MARGIN": os.getenv("REVIEW_MARGIN", "0.05"),
+            "SHAP_BG_PATH": os.getenv("SHAP_BG_PATH", str(SHAP_BG_PATH)),
+            "SHAP_BG_MAX": os.getenv("SHAP_BG_MAX", str(SHAP_BG_MAX)),
         },
         "last_init_error": last_init_error,
     }
