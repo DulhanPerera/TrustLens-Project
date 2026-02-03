@@ -83,6 +83,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:5174",
+        "https://trustlens-fyp.vercel.app",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
