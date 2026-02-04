@@ -24,7 +24,7 @@ import axios from 'axios';
 // The base URL where the FastAPI backend is running.
 // Update this for production deployment (e.g., https://api.trustlens.com)
 // =============================================================================
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = "https://trustlens-project-production.up.railway.app/";
 
 /**
  * Axios instance configured with the backend base URL.
