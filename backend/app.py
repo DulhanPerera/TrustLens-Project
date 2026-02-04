@@ -122,7 +122,7 @@ app.add_middleware(
         "http://localhost:3000",           # React default development port
         "http://localhost:5173",           # Vite default development port
         "http://localhost:5174",           # Vite alternate port
-        "https://trustlens-fyp.vercel.app",  # Production frontend URL
+        "https://trustlens-frontend-beta.vercel.app",  # Production frontend URL
     ],
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allow all headers (Authorization, Content-Type, etc.)
