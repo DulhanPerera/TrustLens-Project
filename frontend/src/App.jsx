@@ -9,8 +9,10 @@ import {
   Activity,
   ArrowRight,
   X,
+  LogOut,
 } from 'lucide-react';
 import XAIChart from './components/XAIChart';
+import GoogleLoginButton from './components/GoogleLoginButton';
 import { getFraudPrediction } from './api';
 
 const API_BASE = 'http://127.0.0.1:8000';
@@ -57,7 +59,42 @@ function DetailRow({ label, value }) {
   );
 }
 
+function HealthStatusItem({ label, ok, loading }) {
+  let dotClass =
+    'w-2.5 h-2.5 rounded-full shadow-[0_0_12px_rgba(148,163,184,0.5)] bg-slate-400';
+  let text = 'Checking';
+
+  if (!loading) {
+    if (ok) {
+      dotClass =
+        'w-2.5 h-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,0.8)]';
+      text = 'Online';
+    } else {
+      dotClass =
+        'w-2.5 h-2.5 rounded-full bg-red-400 shadow-[0_0_12px_rgba(248,113,113,0.8)]';
+      text = 'Offline';
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center gap-2">
+        <span className={dotClass}></span>
+        <span>{label}</span>
+      </div>
+      <span className="text-[11px] uppercase tracking-wider text-blue-200/80 font-bold">
+        {text}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('trustlens_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [history, setHistory] = useState([]);
@@ -68,9 +105,33 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
 
+  const [health, setHealth] = useState(null);
+  const [healthLoading, setHealthLoading] = useState(true);
+  const [healthError, setHealthError] = useState('');
+
   const latestTx = useMemo(() => {
     return history.length > 0 ? history[0] : null;
   }, [history]);
+
+  const loadHealth = async () => {
+    setHealthError('');
+
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch health: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setHealth(data);
+    } catch (error) {
+      console.error('Failed to load system health:', error);
+      setHealth(null);
+      setHealthError('System health data unavailable');
+    } finally {
+      setHealthLoading(false);
+    }
+  };
 
   const loadTransactions = async () => {
     setLoadingLogs(true);
@@ -102,8 +163,23 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadTransactions();
-  }, []);
+    if (user) {
+      loadTransactions();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setHealthLoading(true);
+      loadHealth();
+
+      const interval = setInterval(() => {
+        loadHealth();
+      }, 15000);
+
+      return () => clearInterval(interval);
+    }
+  }, [user]);
 
   const handleAnalysis = async () => {
     setLoading(true);
@@ -195,12 +271,189 @@ export default function App() {
     setDetailLoading(false);
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('trustlens_user');
+    setUser(null);
+    setHistory([]);
+    setSelectedTx(null);
+    setActiveTab('dashboard');
+
+    if (window.google?.accounts?.id) {
+      window.google.accounts.id.disableAutoSelect();
+    }
+  };
+
+  if (!user) {
+    return (
+      <div className="min-h-screen grid grid-cols-1 lg:grid-cols-2 bg-slate-900">
+        <div className="relative hidden lg:flex flex-col justify-center px-20 text-white bg-gradient-to-br from-[#0B172A] via-[#0A1428] to-[#081225] overflow-hidden">
+          <div className="absolute w-[600px] h-[600px] bg-blue-600 opacity-20 blur-[140px] rounded-full -top-40 -left-40 animate-pulse"></div>
+          <div className="absolute w-[500px] h-[500px] bg-blue-500 opacity-20 blur-[140px] rounded-full bottom-0 right-0 animate-pulse"></div>
+
+          <div className="relative z-10">
+            <div className="mb-8 flex items-center gap-4">
+              <div className="bg-white/10 p-4 rounded-2xl border border-white/10">
+                <ShieldAlert size={40} className="text-blue-300" />
+              </div>
+
+              <h1 className="text-5xl xl:text-6xl font-black">
+                TrustLens
+              </h1>
+            </div>
+
+            <p className="text-xl font-semibold text-blue-100 mb-6">
+              AI-Powered Fraud Detection Platform
+            </p>
+
+            <p className="text-blue-200 leading-relaxed max-w-md text-base xl:text-lg">
+              TrustLens is a deep learning fraud detection system that combines
+              neural networks, anomaly detection, and explainable AI to help
+              analysts detect suspicious financial transactions in real time.
+            </p>
+
+            <div className="mt-10 text-sm text-blue-200 space-y-3">
+              <p>✔ Real-time fraud monitoring</p>
+              <p>✔ Deep learning risk scoring</p>
+              <p>✔ Explainable AI insights (XAI)</p>
+              <p>✔ Transaction audit intelligence</p>
+            </div>
+
+            <div className="mt-12">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs uppercase text-blue-300 font-bold tracking-widest">
+                  System Status
+                </p>
+
+                <button
+                  onClick={loadHealth}
+                  className="text-[11px] font-bold uppercase tracking-wider text-blue-200 hover:text-white transition"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              <div className="space-y-3 text-sm text-blue-100">
+                <HealthStatusItem
+                  label="MLP Model"
+                  ok={Boolean(health?.mlp_loaded)}
+                  loading={healthLoading}
+                />
+                <HealthStatusItem
+                  label="Autoencoder Engine"
+                  ok={Boolean(health?.ae_loaded)}
+                  loading={healthLoading}
+                />
+                <HealthStatusItem
+                  label="MongoDB Database"
+                  ok={Boolean(health?.mongodb?.connected)}
+                  loading={healthLoading}
+                />
+                <HealthStatusItem
+                  label="Explainable AI (SHAP)"
+                  ok={Boolean(health?.shap_loaded)}
+                  loading={healthLoading}
+                />
+              </div>
+
+              {healthError && (
+                <p className="mt-4 text-xs text-red-200 font-semibold">{healthError}</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center bg-slate-50 px-6 py-12 lg:px-12">
+          <div className="bg-white p-10 rounded-[2rem] shadow-xl border border-slate-200 text-center w-full max-w-md transition hover:shadow-2xl hover:scale-[1.02]">
+            <div className="flex justify-center mb-4">
+              <div className="bg-slate-900 p-4 rounded-2xl">
+                <ShieldAlert className="text-blue-400" size={34} />
+              </div>
+            </div>
+
+            <h1 className="text-3xl font-black text-slate-800 mb-2">TrustLens</h1>
+            <p className="text-slate-500 mb-8">
+              Sign in with Google to access the fraud detection dashboard
+            </p>
+
+            <div className="flex justify-center">
+              <GoogleLoginButton onLoginSuccess={setUser} />
+            </div>
+
+            <div className="lg:hidden mt-8 text-left bg-slate-50 rounded-2xl p-5 border border-slate-100">
+              <p className="text-sm font-bold text-slate-800 mb-2">
+                AI-Powered Fraud Detection Platform
+              </p>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Real-time fraud monitoring with deep learning, anomaly detection,
+                explainable AI, and transaction audit intelligence.
+              </p>
+
+              <div className="mt-5">
+                <p className="text-[11px] uppercase text-slate-400 font-bold mb-3 tracking-widest">
+                  System Status
+                </p>
+
+                <div className="space-y-3 text-sm text-slate-700">
+                  <HealthStatusItem
+                    label="MLP Model"
+                    ok={Boolean(health?.mlp_loaded)}
+                    loading={healthLoading}
+                  />
+                  <HealthStatusItem
+                    label="Autoencoder Engine"
+                    ok={Boolean(health?.ae_loaded)}
+                    loading={healthLoading}
+                  />
+                  <HealthStatusItem
+                    label="MongoDB Database"
+                    ok={Boolean(health?.mongodb?.connected)}
+                    loading={healthLoading}
+                  />
+                  <HealthStatusItem
+                    label="Explainable AI (SHAP)"
+                    ok={Boolean(health?.shap_loaded)}
+                    loading={healthLoading}
+                  />
+                </div>
+
+                {healthError && (
+                  <p className="mt-4 text-xs text-red-500 font-semibold">{healthError}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans">
       <aside className="w-64 bg-slate-900 text-white fixed h-full z-20 shadow-xl flex flex-col">
         <div className="p-5 flex items-center gap-2 border-b border-slate-800">
           <ShieldAlert className="text-blue-400" size={24} />
           <span className="text-lg font-black uppercase tracking-tight">TrustLens</span>
+        </div>
+
+        <div className="px-4 py-4 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            {user.picture ? (
+              <img
+                src={user.picture}
+                alt={user.name || 'User'}
+                className="w-10 h-10 rounded-full border border-slate-700"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-sm font-bold">
+                {user.name?.[0] || 'U'}
+              </div>
+            )}
+
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-white truncate">{user.name || 'User'}</p>
+              <p className="text-[11px] text-slate-400 truncate">{user.email || ''}</p>
+            </div>
+          </div>
         </div>
 
         <nav className="p-3 flex-1 space-y-1 mt-2">
@@ -234,9 +487,17 @@ export default function App() {
           </a>
         </nav>
 
-        <div className="p-5 border-t border-slate-800">
+        <div className="p-5 border-t border-slate-800 space-y-3">
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-700 transition"
+          >
+            <LogOut size={16} />
+            Logout
+          </button>
+
           <p className="text-[9px] text-slate-600 font-bold uppercase italic text-center">
-            v2.5 | Detail Modal Edition
+            v2.8 | Live Health Monitoring
           </p>
         </div>
       </aside>

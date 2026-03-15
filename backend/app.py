@@ -1,5 +1,5 @@
 """
-TrustLens FastAPI API (MLP + Autoencoder + optional SHAP + MongoDB + .env)
+TrustLens FastAPI API (MLP + Autoencoder + optional SHAP + MongoDB + Google Auth + .env)
 
 Put these files in the SAME folder as this app.py (backend/):
   - mlp_model.keras
@@ -13,7 +13,7 @@ OPTIONAL (recommended for more meaningful SHAP):
 
 Run:
   pip install -r requirements.txt
-  pip install pymongo python-dotenv
+  pip install pymongo python-dotenv google-auth
   uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 """
 
@@ -45,6 +45,10 @@ import joblib
 from pymongo import AsyncMongoClient
 from pymongo.server_api import ServerApi
 from bson import ObjectId
+
+# Google Auth
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 # =============================================================================
 # FastAPI Framework Imports
@@ -92,6 +96,12 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "trustlens_db")
 MONGO_TX_COLLECTION = os.getenv("MONGO_TX_COLLECTION", "transactions")
 MONGO_REPORT_COLLECTION = os.getenv("MONGO_REPORT_COLLECTION", "reports")
+MONGO_USER_COLLECTION = os.getenv("MONGO_USER_COLLECTION", "users")
+
+# =============================================================================
+# Google Auth Configuration
+# =============================================================================
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 # =============================================================================
 # Logging Configuration
@@ -123,6 +133,7 @@ mongo_client: Optional[AsyncMongoClient] = None
 mongo_db = None
 mongo_tx_collection = None
 mongo_report_collection = None
+mongo_user_collection = None
 
 
 # =============================================================================
@@ -190,11 +201,6 @@ def _sanitize_for_mongo(obj: Any) -> Any:
 # Human-Friendly Explanation Helpers
 # =============================================================================
 def _feature_label(name: str) -> str:
-    """
-    Convert raw feature names into more human-friendly labels.
-    PCA features (V1-V28) do not have direct real-world meanings, so they are
-    described as hidden transaction behaviour patterns.
-    """
     if name == "Time":
         return "transaction timing pattern"
     if name == "Amount":
@@ -205,9 +211,6 @@ def _feature_label(name: str) -> str:
 
 
 def _risk_level(score_pct: float) -> str:
-    """
-    Convert numeric risk percentage into a simple business-friendly label.
-    """
     if score_pct >= 70:
         return "HIGH"
     if score_pct >= 40:
@@ -216,9 +219,6 @@ def _risk_level(score_pct: float) -> str:
 
 
 def _join_labels(items: List[str]) -> str:
-    """
-    Join labels into natural language.
-    """
     cleaned = [str(x) for x in items if str(x).strip()]
     if not cleaned:
         return ""
@@ -256,6 +256,10 @@ class ReportRequest(BaseModel):
     include_shap: bool = True
     include_recon: bool = True
     include_raw_features: bool = False
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
 
 
 # =============================================================================
@@ -435,15 +439,12 @@ def _build_text_reason(
     amount_value: Optional[float] = None,
     risk_score_pct: Optional[float] = None,
 ) -> str:
-    """
-    Build a more human-readable explanation for UI and reports.
-    """
     sections: List[str] = []
 
     if time_value is not None or amount_value is not None:
         t = f"{float(time_value):.0f}" if time_value is not None else "-"
         a = f"${float(amount_value):.2f}" if amount_value is not None else "-"
-        sections.append(f"Transaction analysed at time {t} for amount {a}.")
+        sections.append(f"Transaction analysed with time feature value {t} and amount {a}.")
 
     sections.append(
         "The system compared this transaction against learned normal and suspicious behaviour patterns."
@@ -567,7 +568,7 @@ async def _save_batch_to_mongo(batch_payload: Dict[str, Any]) -> Optional[str]:
 # =============================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mongo_client, mongo_db, mongo_tx_collection, mongo_report_collection
+    global mongo_client, mongo_db, mongo_tx_collection, mongo_report_collection, mongo_user_collection
 
     try:
         mongo_client = AsyncMongoClient(
@@ -577,6 +578,7 @@ async def lifespan(app: FastAPI):
         mongo_db = mongo_client[MONGO_DB_NAME]
         mongo_tx_collection = mongo_db[MONGO_TX_COLLECTION]
         mongo_report_collection = mongo_db[MONGO_REPORT_COLLECTION]
+        mongo_user_collection = mongo_db[MONGO_USER_COLLECTION]
 
         await mongo_client.admin.command("ping")
 
@@ -590,6 +592,9 @@ async def lifespan(app: FastAPI):
         await mongo_report_collection.create_index("decision")
         await mongo_report_collection.create_index("transaction_id")
 
+        await mongo_user_collection.create_index("google_sub", unique=True)
+        await mongo_user_collection.create_index("email")
+
         logging.info("MongoDB connected successfully.")
 
     except Exception as e:
@@ -598,6 +603,7 @@ async def lifespan(app: FastAPI):
         mongo_db = None
         mongo_tx_collection = None
         mongo_report_collection = None
+        mongo_user_collection = None
 
     load_assets()
 
@@ -613,7 +619,7 @@ async def lifespan(app: FastAPI):
 # =============================================================================
 app = FastAPI(
     title="TrustLens API",
-    description="Fraud Detection with MLP + Autoencoder + XAI (Explainable AI) + MongoDB",
+    description="Fraud Detection with MLP + Autoencoder + XAI (Explainable AI) + MongoDB + Google Auth",
     lifespan=lifespan,
 )
 
@@ -626,11 +632,101 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
         "https://trustlens-frontend-beta.vercel.app",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# =============================================================================
+# Google Authentication Endpoints
+# =============================================================================
+@app.post("/auth/google")
+async def auth_google(payload: GoogleAuthRequest):
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID is not configured")
+
+    if mongo_user_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB user collection is not available")
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            payload.credential,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+
+        google_sub = idinfo.get("sub")
+        email = idinfo.get("email")
+        name = idinfo.get("name")
+        picture = idinfo.get("picture")
+        email_verified = bool(idinfo.get("email_verified", False))
+        given_name = idinfo.get("given_name")
+        family_name = idinfo.get("family_name")
+
+        if not google_sub or not email:
+            raise HTTPException(status_code=400, detail="Invalid Google token payload")
+
+        user_doc = {
+            "google_sub": google_sub,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "given_name": given_name,
+            "family_name": family_name,
+            "email_verified": email_verified,
+            "role": "admin",
+            "last_login_at": datetime.utcnow(),
+            "auth_provider": "google",
+        }
+
+        await mongo_user_collection.update_one(
+            {"google_sub": google_sub},
+            {"$set": user_doc},
+            upsert=True,
+        )
+
+        logging.info(f"google_auth_success: email={email} google_sub={google_sub}")
+
+        return {
+            "message": "Google authentication successful",
+            "user": {
+                "google_sub": google_sub,
+                "email": email,
+                "name": name,
+                "picture": picture,
+                "given_name": given_name,
+                "family_name": family_name,
+                "email_verified": email_verified,
+                "role": "admin",
+            },
+        }
+
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid Google ID token")
+    except Exception as e:
+        logging.exception(f"Google auth failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Google auth failed: {str(e)}")
+
+
+@app.get("/users")
+async def get_users(limit: int = 20):
+    if mongo_user_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB user collection is not available")
+
+    limit = max(1, min(limit, 200))
+    cursor = mongo_user_collection.find().sort("last_login_at", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+
+    for d in docs:
+        d["_id"] = str(d["_id"])
+
+    return {"count": len(docs), "items": docs}
 
 
 # =============================================================================
@@ -697,7 +793,7 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
                 risk_score_pct=risk_score_pct,
             )
             if tx.include_xai
-            else f"Transaction analysed at time {tx.Time:.0f} for amount ${tx.Amount:.2f}. Final risk level: {_risk_level(risk_score_pct)} ({risk_score_pct:.2f}%)."
+            else f"Transaction analysed with time feature value {tx.Time:.0f} and amount ${tx.Amount:.2f}. Final risk level: {_risk_level(risk_score_pct)} ({risk_score_pct:.2f}%)."
         )
 
         if is_fraud:
@@ -1015,6 +1111,7 @@ def health():
             "db_name": MONGO_DB_NAME,
             "tx_collection": MONGO_TX_COLLECTION,
             "report_collection": MONGO_REPORT_COLLECTION,
+            "user_collection": MONGO_USER_COLLECTION,
         },
         "paths": {
             "base_dir": str(BASE_DIR),
@@ -1041,6 +1138,7 @@ def health():
             "SHAP_BG_MAX": os.getenv("SHAP_BG_MAX", str(SHAP_BG_MAX)),
             "MONGO_URI_SET": bool(os.getenv("MONGO_URI")),
             "MONGO_DB_NAME": MONGO_DB_NAME,
+            "GOOGLE_CLIENT_ID_SET": bool(GOOGLE_CLIENT_ID),
         },
         "last_init_error": last_init_error,
     }
