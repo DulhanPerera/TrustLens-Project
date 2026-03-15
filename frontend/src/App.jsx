@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import XAIChart from './components/XAIChart';
 import GoogleLoginButton from './components/GoogleLoginButton';
+import AdminPanel from './pages/AdminPanel';
 import { getFraudPrediction } from './api';
 
 const API_BASE = 'http://127.0.0.1:8000';
@@ -96,7 +97,18 @@ export default function App() {
   });
 
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = localStorage.getItem('trustlens_user');
+    if (!saved) return 'dashboard';
+
+    try {
+      const parsed = JSON.parse(saved);
+      return parsed?.login_type === 'admin' ? 'admin' : 'dashboard';
+    } catch {
+      return 'dashboard';
+    }
+  });
+
   const [history, setHistory] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [logsError, setLogsError] = useState('');
@@ -108,6 +120,10 @@ export default function App() {
   const [health, setHealth] = useState(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [healthError, setHealthError] = useState('');
+
+  const canAccessAdmin = Boolean(
+    user && ['admin', 'analyst'].includes((user.role || '').toLowerCase())
+  );
 
   const latestTx = useMemo(() => {
     return history.length > 0 ? history[0] : null;
@@ -163,10 +179,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user) {
-      loadTransactions();
+    if (!user) return;
+
+    loadTransactions();
+
+    if (user.login_type === 'admin' && canAccessAdmin) {
+      setActiveTab('admin');
+    } else if (activeTab === 'admin' && !canAccessAdmin) {
+      setActiveTab('dashboard');
     }
-  }, [user]);
+  }, [user, canAccessAdmin, activeTab]);
 
   useEffect(() => {
     if (!user) {
@@ -296,9 +318,7 @@ export default function App() {
                 <ShieldAlert size={40} className="text-blue-300" />
               </div>
 
-              <h1 className="text-5xl xl:text-6xl font-black">
-                TrustLens
-              </h1>
+              <h1 className="text-5xl xl:text-6xl font-black">TrustLens</h1>
             </div>
 
             <p className="text-xl font-semibold text-blue-100 mb-6">
@@ -372,11 +392,46 @@ export default function App() {
 
             <h1 className="text-3xl font-black text-slate-800 mb-2">TrustLens</h1>
             <p className="text-slate-500 mb-8">
-              Sign in with Google to access the fraud detection dashboard
+              Sign in with Google to access the fraud detection platform
             </p>
 
-            <div className="flex justify-center">
-              <GoogleLoginButton onLoginSuccess={setUser} />
+            <div className="w-full flex flex-col items-center space-y-6">
+              <div className="w-full flex flex-col items-center">
+                <p className="mb-2 text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+                  User Login
+                </p>
+                <GoogleLoginButton
+                  loginType="dashboard"
+                  onLoginSuccess={(loggedInUser) => {
+                    setUser(loggedInUser);
+                    setActiveTab('dashboard');
+                  }}
+                />
+              </div>
+
+              <div className="w-full flex items-center gap-4">
+                <div className="flex-1 h-px bg-slate-200"></div>
+                <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">
+                  Admin Access
+                </span>
+                <div className="flex-1 h-px bg-slate-200"></div>
+              </div>
+
+              <div className="w-full flex flex-col items-center">
+                <p className="mb-2 text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+                  Admin Login
+                </p>
+                <GoogleLoginButton
+                  loginType="admin"
+                  onLoginSuccess={(loggedInUser) => {
+                    setUser(loggedInUser);
+                    setActiveTab('admin');
+                  }}
+                />
+                <p className="mt-3 text-xs text-slate-500 font-medium text-center">
+                  Only admins and analysts can access the admin panel
+                </p>
+              </div>
             </div>
 
             <div className="lg:hidden mt-8 text-left bg-slate-50 rounded-2xl p-5 border border-slate-100">
@@ -452,6 +507,9 @@ export default function App() {
             <div className="min-w-0">
               <p className="text-sm font-bold text-white truncate">{user.name || 'User'}</p>
               <p className="text-[11px] text-slate-400 truncate">{user.email || ''}</p>
+              <p className="text-[10px] text-blue-400 uppercase font-bold mt-1">
+                {user.role || 'user'}
+              </p>
             </div>
           </div>
         </div>
@@ -479,12 +537,18 @@ export default function App() {
             <Database size={18} /> <span className="text-sm font-bold">Audit Logs</span>
           </button>
 
-          <a
-            href="/admin"
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-slate-400 hover:bg-slate-800 transition"
-          >
-            <UserCheck size={18} /> <span className="text-sm font-bold">Admin Panel</span>
-          </a>
+          {canAccessAdmin && (
+            <button
+              onClick={() => setActiveTab('admin')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition ${
+                activeTab === 'admin'
+                  ? 'bg-blue-600 text-white shadow-lg'
+                  : 'text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <UserCheck size={18} /> <span className="text-sm font-bold">Admin Panel</span>
+            </button>
+          )}
         </nav>
 
         <div className="p-5 border-t border-slate-800 space-y-3">
@@ -497,7 +561,7 @@ export default function App() {
           </button>
 
           <p className="text-[9px] text-slate-600 font-bold uppercase italic text-center">
-            v2.8 | Live Health Monitoring
+            v3.1 | Role Based Access
           </p>
         </div>
       </aside>
@@ -689,6 +753,8 @@ export default function App() {
             {logsError && <div className="text-red-500 font-semibold text-sm">{logsError}</div>}
           </div>
         )}
+
+        {activeTab === 'admin' && canAccessAdmin && <AdminPanel />}
       </main>
 
       {(selectedTx || detailLoading || detailError) && (

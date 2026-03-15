@@ -1,5 +1,6 @@
 """
-TrustLens FastAPI API (MLP + Autoencoder + optional SHAP + MongoDB + Google Auth + .env)
+TrustLens FastAPI API
+(MLP + Autoencoder + optional SHAP + MongoDB + Google Auth + Role-Based Access + .env)
 
 Put these files in the SAME folder as this app.py (backend/):
   - mlp_model.keras
@@ -97,6 +98,8 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "trustlens_db")
 MONGO_TX_COLLECTION = os.getenv("MONGO_TX_COLLECTION", "transactions")
 MONGO_REPORT_COLLECTION = os.getenv("MONGO_REPORT_COLLECTION", "reports")
 MONGO_USER_COLLECTION = os.getenv("MONGO_USER_COLLECTION", "users")
+MONGO_SETTINGS_COLLECTION = os.getenv("MONGO_SETTINGS_COLLECTION", "settings")
+MONGO_ACTIVITY_COLLECTION = os.getenv("MONGO_ACTIVITY_COLLECTION", "activity_logs")
 
 # =============================================================================
 # Google Auth Configuration
@@ -134,7 +137,14 @@ mongo_db = None
 mongo_tx_collection = None
 mongo_report_collection = None
 mongo_user_collection = None
+mongo_settings_collection = None
+mongo_activity_collection = None
 
+# =============================================================================
+# Role Configuration
+# =============================================================================
+ALLOWED_ADMIN_ROLES = {"admin", "analyst"}
+ALLOWED_USER_ROLES = {"admin", "analyst", "user"}
 
 # =============================================================================
 # Utility Functions
@@ -197,6 +207,43 @@ def _sanitize_for_mongo(obj: Any) -> Any:
     return obj
 
 
+def _normalize_role(role: Optional[str]) -> str:
+    role = (role or "user").strip().lower()
+    if role not in ALLOWED_USER_ROLES:
+        return "user"
+    return role
+
+
+async def log_activity(action: str, actor: str = "system", details: Optional[dict] = None):
+    if mongo_activity_collection is None:
+        return
+
+    doc = {
+        "action": action,
+        "actor": actor,
+        "details": details or {},
+        "created_at": datetime.utcnow(),
+    }
+    await mongo_activity_collection.insert_one(doc)
+
+
+def _serialize_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    if doc is None:
+        return doc
+
+    def convert(value):
+        if isinstance(value, ObjectId):
+            return str(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [convert(v) for v in value]
+        if isinstance(value, dict):
+            return {k: convert(v) for k, v in value.items()}
+        return value
+
+    return convert(doc)
+
 # =============================================================================
 # Human-Friendly Explanation Helpers
 # =============================================================================
@@ -227,7 +274,6 @@ def _join_labels(items: List[str]) -> str:
     if len(cleaned) == 2:
         return f"{cleaned[0]} and {cleaned[1]}"
     return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
-
 
 # =============================================================================
 # Pydantic Request Schemas
@@ -260,7 +306,20 @@ class ReportRequest(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     credential: str
+    login_type: str = "dashboard"
 
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str
+
+
+class AnalystNoteRequest(BaseModel):
+    note: str
+
+
+class SettingUpdate(BaseModel):
+    key: str
+    value: Any
 
 # =============================================================================
 # Asset Loading
@@ -336,7 +395,9 @@ def load_assets():
                 if SHAP_BG_PATH.exists():
                     bg = np.load(str(SHAP_BG_PATH)).astype(np.float32)
                     if bg.ndim != 2 or bg.shape[1] != 30:
-                        raise ValueError(f"Invalid shap_background.npy shape: {bg.shape} (expected (N,30))")
+                        raise ValueError(
+                            f"Invalid shap_background.npy shape: {bg.shape} (expected (N,30))"
+                        )
                     if bg.shape[0] > SHAP_BG_MAX:
                         bg = bg[:SHAP_BG_MAX]
                     bg_source = f"file:{SHAP_BG_PATH.name}"
@@ -355,7 +416,9 @@ def load_assets():
                     bg = np.zeros((10, 30), dtype=np.float32)
 
                 shap_explainer = shap.DeepExplainer(mlp_model, bg)
-                logging.info(f"SHAP initialized. background_source={bg_source} shape={tuple(bg.shape)}")
+                logging.info(
+                    f"SHAP initialized. background_source={bg_source} shape={tuple(bg.shape)}"
+                )
 
             except Exception as e:
                 shap_explainer = None
@@ -372,7 +435,6 @@ def load_assets():
         mlp_model, ae_model, scaler, calibrator, shap_explainer = None, None, None, None, None
         last_init_error = str(e)
         logging.exception("Initialization Error (full traceback):")
-
 
 # =============================================================================
 # XAI Helpers
@@ -399,7 +461,9 @@ def _xai_shap(
 
         abs_vals = np.abs(vals)
 
-        fn = feature_names if len(feature_names) == len(vals) else (["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"])
+        fn = feature_names if len(feature_names) == len(vals) else (
+            ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
+        )
         x_raw_1d = np.array(x_raw, dtype=np.float32).reshape(-1)
         x_scaled_1d = np.array(x_scaled, dtype=np.float32).reshape(-1)
 
@@ -427,7 +491,9 @@ def _xai_shap(
 
 def _xai_recon_pf(x_scaled_row: np.ndarray, x_hat_row: np.ndarray, top_k: int) -> List[Dict[str, Any]]:
     errs = _per_feature_sq_error(x_scaled_row, x_hat_row)
-    fn = feature_names if len(feature_names) == len(errs) else (["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"])
+    fn = feature_names if len(feature_names) == len(errs) else (
+        ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
+    )
     idx = np.argsort(errs)[-top_k:][::-1]
     return [{"name": fn[i], "impact": float(errs[i])} for i in idx]
 
@@ -484,7 +550,6 @@ def _build_text_reason(
 
     return " ".join(sections)
 
-
 # =============================================================================
 # MongoDB Save Helpers
 # =============================================================================
@@ -513,6 +578,8 @@ async def _save_prediction_to_mongo(tx: Transaction, response_payload: Dict[str,
         "explanation": response_payload.get("explanation"),
         "xai_data": _sanitize_for_mongo(response_payload.get("xai_data", [])),
         "ae_xai_data": _sanitize_for_mongo(response_payload.get("ae_xai_data", [])),
+        "analyst_notes": [],
+        "analyst_override": False,
         "created_at": datetime.utcnow(),
     }
 
@@ -562,13 +629,13 @@ async def _save_batch_to_mongo(batch_payload: Dict[str, Any]) -> Optional[str]:
     result = await mongo_tx_collection.insert_one(doc)
     return str(result.inserted_id)
 
-
 # =============================================================================
 # FastAPI Lifespan
 # =============================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mongo_client, mongo_db, mongo_tx_collection, mongo_report_collection, mongo_user_collection
+    global mongo_client, mongo_db, mongo_tx_collection, mongo_report_collection
+    global mongo_user_collection, mongo_settings_collection, mongo_activity_collection
 
     try:
         mongo_client = AsyncMongoClient(
@@ -579,13 +646,14 @@ async def lifespan(app: FastAPI):
         mongo_tx_collection = mongo_db[MONGO_TX_COLLECTION]
         mongo_report_collection = mongo_db[MONGO_REPORT_COLLECTION]
         mongo_user_collection = mongo_db[MONGO_USER_COLLECTION]
+        mongo_settings_collection = mongo_db[MONGO_SETTINGS_COLLECTION]
+        mongo_activity_collection = mongo_db[MONGO_ACTIVITY_COLLECTION]
 
         await mongo_client.admin.command("ping")
 
         await mongo_tx_collection.create_index("created_at")
         await mongo_tx_collection.create_index("status")
         await mongo_tx_collection.create_index("is_fraud")
-        await mongo_tx_collection.create_index("decision")
         await mongo_tx_collection.create_index("transaction_id")
 
         await mongo_report_collection.create_index("created_at")
@@ -594,6 +662,10 @@ async def lifespan(app: FastAPI):
 
         await mongo_user_collection.create_index("google_sub", unique=True)
         await mongo_user_collection.create_index("email")
+
+        await mongo_activity_collection.create_index("created_at")
+        await mongo_activity_collection.create_index("action")
+        await mongo_settings_collection.create_index("key", unique=True)
 
         logging.info("MongoDB connected successfully.")
 
@@ -604,6 +676,8 @@ async def lifespan(app: FastAPI):
         mongo_tx_collection = None
         mongo_report_collection = None
         mongo_user_collection = None
+        mongo_settings_collection = None
+        mongo_activity_collection = None
 
     load_assets()
 
@@ -612,7 +686,6 @@ async def lifespan(app: FastAPI):
     if mongo_client is not None:
         await mongo_client.close()
         logging.info("MongoDB connection closed.")
-
 
 # =============================================================================
 # FastAPI Application Initialization
@@ -640,7 +713,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # =============================================================================
 # Google Authentication Endpoints
 # =============================================================================
@@ -653,6 +725,10 @@ async def auth_google(payload: GoogleAuthRequest):
         raise HTTPException(status_code=503, detail="MongoDB user collection is not available")
 
     try:
+        login_type = (payload.login_type or "dashboard").strip().lower()
+        if login_type not in {"dashboard", "admin"}:
+            raise HTTPException(status_code=400, detail="Invalid login_type")
+
         idinfo = id_token.verify_oauth2_token(
             payload.credential,
             google_requests.Request(),
@@ -670,6 +746,19 @@ async def auth_google(payload: GoogleAuthRequest):
         if not google_sub or not email:
             raise HTTPException(status_code=400, detail="Invalid Google token payload")
 
+        existing_user = await mongo_user_collection.find_one({"google_sub": google_sub})
+
+        if existing_user:
+            role = _normalize_role(existing_user.get("role"))
+        else:
+            role = "user"
+
+        if login_type == "admin" and role not in ALLOWED_ADMIN_ROLES:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied. Only admins and analysts can access the admin panel."
+            )
+
         user_doc = {
             "google_sub": google_sub,
             "email": email,
@@ -678,7 +767,7 @@ async def auth_google(payload: GoogleAuthRequest):
             "given_name": given_name,
             "family_name": family_name,
             "email_verified": email_verified,
-            "role": "admin",
+            "role": role,
             "last_login_at": datetime.utcnow(),
             "auth_provider": "google",
         }
@@ -689,10 +778,19 @@ async def auth_google(payload: GoogleAuthRequest):
             upsert=True,
         )
 
-        logging.info(f"google_auth_success: email={email} google_sub={google_sub}")
+        await log_activity(
+            action="google_login",
+            actor=email,
+            details={"google_sub": google_sub, "role": role, "login_type": login_type},
+        )
+
+        logging.info(
+            f"google_auth_success: email={email} google_sub={google_sub} role={role} login_type={login_type}"
+        )
 
         return {
             "message": "Google authentication successful",
+            "login_type": login_type,
             "user": {
                 "google_sub": google_sub,
                 "email": email,
@@ -701,7 +799,8 @@ async def auth_google(payload: GoogleAuthRequest):
                 "given_name": given_name,
                 "family_name": family_name,
                 "email_verified": email_verified,
-                "role": "admin",
+                "role": role,
+                "login_type": login_type,
             },
         }
 
@@ -723,11 +822,43 @@ async def get_users(limit: int = 20):
     cursor = mongo_user_collection.find().sort("last_login_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
 
-    for d in docs:
-        d["_id"] = str(d["_id"])
-
+    docs = [_serialize_doc(d) for d in docs]
     return {"count": len(docs), "items": docs}
 
+
+@app.patch("/users/{user_id}/role")
+async def update_user_role(user_id: str, payload: UpdateUserRoleRequest):
+    if mongo_user_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB user collection is not available")
+
+    new_role = _normalize_role(payload.role)
+
+    try:
+        result = await mongo_user_collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"role": new_role}}
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user id")
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    updated_user = await mongo_user_collection.find_one({"_id": ObjectId(user_id)})
+    updated_user = _serialize_doc(updated_user)
+
+    await log_activity(
+        action="user_role_updated",
+        actor="admin",
+        details={"user_id": user_id, "new_role": new_role},
+    )
+
+    logging.info(f"user_role_updated: user_id={user_id} new_role={new_role}")
+
+    return {
+        "message": "User role updated successfully",
+        "user": updated_user,
+    }
 
 # =============================================================================
 # API Endpoint: Single Transaction Prediction
@@ -735,7 +866,10 @@ async def get_users(limit: int = 20):
 @app.post("/predict")
 async def predict(tx: Transaction, background_tasks: BackgroundTasks):
     if mlp_model is None or ae_model is None or scaler is None:
-        raise HTTPException(status_code=503, detail=f"Model not ready: {last_init_error or 'unknown error'}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model not ready: {last_init_error or 'unknown error'}"
+        )
 
     try:
         x_raw = np.array([[tx.Time] + tx.V_features + [tx.Amount]], dtype=np.float32)
@@ -772,7 +906,11 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
         combined_score = float(w_mlp * p_fraud + w_ae * anomaly_score)
 
         combined_thr = thresholds.get("combined_thr_val_maxf1", {}).get("thr", None)
-        combined_thr = float(combined_thr) if combined_thr is not None else float(os.getenv("COMBINED_THR", "0.5"))
+        combined_thr = (
+            float(combined_thr)
+            if combined_thr is not None
+            else float(os.getenv("COMBINED_THR", "0.5"))
+        )
 
         is_fraud = combined_score >= combined_thr
 
@@ -793,7 +931,11 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
                 risk_score_pct=risk_score_pct,
             )
             if tx.include_xai
-            else f"Transaction analysed with time feature value {tx.Time:.0f} and amount ${tx.Amount:.2f}. Final risk level: {_risk_level(risk_score_pct)} ({risk_score_pct:.2f}%)."
+            else (
+                f"Transaction analysed with time feature value {tx.Time:.0f} "
+                f"and amount ${tx.Amount:.2f}. Final risk level: "
+                f"{_risk_level(risk_score_pct)} ({risk_score_pct:.2f}%)."
+            )
         )
 
         if is_fraud:
@@ -831,12 +973,22 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
         mongo_id = await _save_prediction_to_mongo(tx, response)
         response["mongo_id"] = mongo_id
 
+        await log_activity(
+            action="transaction_predicted",
+            actor="system",
+            details={
+                "transaction_id": tx.transaction_id,
+                "mongo_id": mongo_id,
+                "status": response["status"],
+                "risk_score": response["risk_score"],
+            },
+        )
+
         return response
 
     except Exception as e:
         logging.error(f"Prediction Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal analysis failure: {str(e)}")
-
 
 # =============================================================================
 # API Endpoint: Batch Transaction Prediction
@@ -844,7 +996,10 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
 @app.post("/predict_batch")
 async def predict_batch(req: BatchRequest):
     if mlp_model is None or ae_model is None or scaler is None:
-        raise HTTPException(status_code=503, detail=f"Model not ready: {last_init_error or 'unknown error'}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model not ready: {last_init_error or 'unknown error'}"
+        )
 
     try:
         txs = req.transactions
@@ -896,7 +1051,11 @@ async def predict_batch(req: BatchRequest):
         combined = (w_mlp * p_fraud + w_ae * anomaly_score).astype(np.float32)
 
         combined_thr = thresholds.get("combined_thr_val_maxf1", {}).get("thr", None)
-        combined_thr = float(combined_thr) if combined_thr is not None else float(os.getenv("COMBINED_THR", "0.5"))
+        combined_thr = (
+            float(combined_thr)
+            if combined_thr is not None
+            else float(os.getenv("COMBINED_THR", "0.5"))
+        )
 
         is_fraud = combined >= combined_thr
 
@@ -953,12 +1112,17 @@ async def predict_batch(req: BatchRequest):
         mongo_id = await _save_batch_to_mongo(batch_response)
         batch_response["mongo_id"] = mongo_id
 
+        await log_activity(
+            action="batch_prediction",
+            actor="system",
+            details={"count": len(results), "mongo_id": mongo_id},
+        )
+
         return batch_response
 
     except Exception as e:
         logging.error(f"Batch Prediction Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
-
 
 # =============================================================================
 # API Endpoint: Detailed Fraud Analysis Report
@@ -966,7 +1130,10 @@ async def predict_batch(req: BatchRequest):
 @app.post("/report")
 async def report(req: ReportRequest):
     if mlp_model is None or ae_model is None or scaler is None:
-        raise HTTPException(status_code=503, detail=f"Model not ready: {last_init_error or 'unknown error'}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model not ready: {last_init_error or 'unknown error'}"
+        )
 
     try:
         x_raw = np.array([[req.Time] + req.V_features + [req.Amount]], dtype=np.float32)
@@ -1003,7 +1170,11 @@ async def report(req: ReportRequest):
         combined_score = float(w_mlp * p_fraud_cal + w_ae * anomaly_score)
 
         combined_thr = thresholds.get("combined_thr_val_maxf1", {}).get("thr", None)
-        combined_thr = float(combined_thr) if combined_thr is not None else float(os.getenv("COMBINED_THR", "0.5"))
+        combined_thr = (
+            float(combined_thr)
+            if combined_thr is not None
+            else float(os.getenv("COMBINED_THR", "0.5"))
+        )
 
         review_margin = float(os.getenv("REVIEW_MARGIN", "0.05"))
         if combined_score >= combined_thr:
@@ -1088,12 +1259,135 @@ async def report(req: ReportRequest):
         mongo_id = await _save_report_to_mongo(req, card)
         card["mongo_id"] = mongo_id
 
+        await log_activity(
+            action="report_generated",
+            actor="system",
+            details={
+                "transaction_id": req.transaction_id,
+                "mongo_id": mongo_id,
+                "decision": decision,
+            },
+        )
+
         return card
 
     except Exception as e:
         logging.error(f"Report Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
+# =============================================================================
+# Admin Workflow Endpoints
+# =============================================================================
+@app.patch("/transactions/{tx_id}/mark-legitimate")
+async def mark_legitimate(tx_id: str):
+    if mongo_tx_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not connected")
+
+    try:
+        result = await mongo_tx_collection.update_one(
+            {"_id": ObjectId(tx_id)},
+            {"$set": {
+                "status": "APPROVED",
+                "is_fraud": False,
+                "analyst_override": True,
+            }}
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid transaction id")
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    updated_doc = await mongo_tx_collection.find_one({"_id": ObjectId(tx_id)})
+    updated_doc = _serialize_doc(updated_doc)
+
+    await log_activity("mark_legitimate", "analyst", {"transaction_id": tx_id})
+
+    return {
+        "message": "Transaction marked as legitimate",
+        "item": updated_doc,
+    }
+
+
+@app.post("/transactions/{tx_id}/note")
+async def add_analyst_note(tx_id: str, payload: AnalystNoteRequest):
+    if mongo_tx_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not connected")
+
+    note_doc = {
+        "note": payload.note,
+        "created_at": datetime.utcnow(),
+    }
+
+    try:
+        result = await mongo_tx_collection.update_one(
+            {"_id": ObjectId(tx_id)},
+            {"$push": {"analyst_notes": note_doc}}
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid transaction id")
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    updated_doc = await mongo_tx_collection.find_one({"_id": ObjectId(tx_id)})
+    updated_doc = _serialize_doc(updated_doc)
+
+    await log_activity(
+        "analyst_note_added",
+        "analyst",
+        {"transaction_id": tx_id, "note": payload.note},
+    )
+
+    return {
+        "message": "Note added",
+        "item": updated_doc,
+    }
+
+
+@app.get("/settings")
+async def get_settings():
+    if mongo_settings_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not connected")
+
+    cursor = mongo_settings_collection.find()
+    docs = await cursor.to_list(length=100)
+    docs = [_serialize_doc(d) for d in docs]
+
+    return {"items": docs}
+
+
+@app.post("/settings")
+async def update_setting(payload: SettingUpdate):
+    if mongo_settings_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not connected")
+
+    await mongo_settings_collection.update_one(
+        {"key": payload.key},
+        {"$set": {"key": payload.key, "value": payload.value}},
+        upsert=True,
+    )
+
+    await log_activity(
+        "settings_updated",
+        "admin",
+        {"key": payload.key, "value": payload.value},
+    )
+
+    return {"message": "Setting updated"}
+
+
+@app.get("/activity-logs")
+async def get_activity_logs(limit: int = 50):
+    if mongo_activity_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB not connected")
+
+    limit = max(1, min(limit, 200))
+    cursor = mongo_activity_collection.find().sort("created_at", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+    docs = [_serialize_doc(d) for d in docs]
+
+    return {"count": len(docs), "items": docs}
 
 # =============================================================================
 # API Endpoint: Health Check
@@ -1112,6 +1406,8 @@ def health():
             "tx_collection": MONGO_TX_COLLECTION,
             "report_collection": MONGO_REPORT_COLLECTION,
             "user_collection": MONGO_USER_COLLECTION,
+            "settings_collection": MONGO_SETTINGS_COLLECTION,
+            "activity_collection": MONGO_ACTIVITY_COLLECTION,
         },
         "paths": {
             "base_dir": str(BASE_DIR),
@@ -1143,7 +1439,6 @@ def health():
         "last_init_error": last_init_error,
     }
 
-
 # =============================================================================
 # MongoDB Read Endpoints for Admin / Dashboard
 # =============================================================================
@@ -1155,9 +1450,7 @@ async def get_transactions(limit: int = 20):
     limit = max(1, min(limit, 200))
     cursor = mongo_tx_collection.find().sort("created_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
-
-    for d in docs:
-        d["_id"] = str(d["_id"])
+    docs = [_serialize_doc(d) for d in docs]
 
     return {"count": len(docs), "items": docs}
 
@@ -1170,9 +1463,7 @@ async def get_reports(limit: int = 20):
     limit = max(1, min(limit, 200))
     cursor = mongo_report_collection.find().sort("created_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
-
-    for d in docs:
-        d["_id"] = str(d["_id"])
+    docs = [_serialize_doc(d) for d in docs]
 
     return {"count": len(docs), "items": docs}
 
@@ -1190,8 +1481,7 @@ async def get_transaction_by_id(mongo_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    doc["_id"] = str(doc["_id"])
-    return doc
+    return _serialize_doc(doc)
 
 
 @app.get("/reports/{mongo_id}")
@@ -1207,5 +1497,4 @@ async def get_report_by_id(mongo_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    doc["_id"] = str(doc["_id"])
-    return doc
+    return _serialize_doc(doc)
