@@ -6,7 +6,10 @@ import {
   getSystemSettings,
   updateSystemSettings,
   getActivityLogs,
+  getApiKeys,
+  getRequestLogs,
 } from '../api';
+import ApiKeysSection from '../components/ApiKeysSection';
 
 const API_BASE = 'http://127.0.0.1:8000';
 
@@ -99,6 +102,9 @@ export default function AdminPanel() {
   const [health, setHealth] = useState(null);
   const [activityLogs, setActivityLogs] = useState([]);
 
+  const [apiKeys, setApiKeys] = useState([]);
+  const [requestLogs, setRequestLogs] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeSection, setActiveSection] = useState('overview');
@@ -140,15 +146,25 @@ export default function AdminPanel() {
     setError('');
 
     try {
-      const [usersRes, txRes, reportsRes, healthRes, activityData, settingsData] =
-        await Promise.all([
-          fetch(`${API_BASE}/users?limit=50`),
-          fetch(`${API_BASE}/transactions?limit=50`),
-          fetch(`${API_BASE}/reports?limit=50`),
-          fetch(`${API_BASE}/health`),
-          getActivityLogs(50),
-          getSystemSettings(),
-        ]);
+      const [
+        usersRes,
+        txRes,
+        reportsRes,
+        healthRes,
+        activityData,
+        settingsData,
+        apiKeysData,
+        requestLogsData,
+      ] = await Promise.all([
+        fetch(`${API_BASE}/users?limit=50`),
+        fetch(`${API_BASE}/transactions?limit=50`),
+        fetch(`${API_BASE}/reports?limit=50`),
+        fetch(`${API_BASE}/health`),
+        getActivityLogs(50),
+        getSystemSettings(),
+        getApiKeys(50),
+        getRequestLogs(50),
+      ]);
 
       if (!usersRes.ok || !txRes.ok || !reportsRes.ok || !healthRes.ok) {
         throw new Error('Failed to load admin data');
@@ -164,11 +180,19 @@ export default function AdminPanel() {
       setReports(reportsData.items || []);
       setHealth(healthData || null);
       setActivityLogs(activityData.items || []);
+      setApiKeys(apiKeysData.items || []);
+      setRequestLogs(requestLogsData.items || []);
+
+      const settingsItems = Array.isArray(settingsData.items) ? settingsData.items : [];
+      const settingsMap = settingsItems.reduce((acc, item) => {
+        acc[item.key] = item.value;
+        return acc;
+      }, {});
 
       setSettingsForm({
-        site_name: settingsData.site_name ?? 'TrustLens',
-        maintenance_mode: settingsData.maintenance_mode ?? false,
-        notifications_enabled: settingsData.notifications_enabled ?? true,
+        site_name: settingsMap.site_name ?? 'TrustLens',
+        maintenance_mode: settingsMap.maintenance_mode ?? false,
+        notifications_enabled: settingsMap.notifications_enabled ?? true,
       });
     } catch (err) {
       console.error(err);
@@ -300,19 +324,19 @@ export default function AdminPanel() {
     setSettingsSaving(true);
 
     try {
-      const data = await updateSystemSettings({
-        site_name: settingsForm.site_name,
-        maintenance_mode: settingsForm.maintenance_mode,
-        notifications_enabled: settingsForm.notifications_enabled,
+      await updateSystemSettings({
+        key: 'site_name',
+        value: settingsForm.site_name,
       });
 
-      setSettingsForm({
-        site_name: data.settings?.site_name ?? settingsForm.site_name,
-        maintenance_mode:
-          data.settings?.maintenance_mode ?? settingsForm.maintenance_mode,
-        notifications_enabled:
-          data.settings?.notifications_enabled ??
-          settingsForm.notifications_enabled,
+      await updateSystemSettings({
+        key: 'maintenance_mode',
+        value: settingsForm.maintenance_mode,
+      });
+
+      await updateSystemSettings({
+        key: 'notifications_enabled',
+        value: settingsForm.notifications_enabled,
       });
 
       await loadActivityLogsOnly();
@@ -385,7 +409,7 @@ export default function AdminPanel() {
             Admin Panel
           </h1>
           <p className="text-slate-500 text-sm font-medium">
-            TrustLens system oversight, fraud analytics, reports, and monitoring
+            TrustLens system oversight, fraud analytics, reports, monitoring, and API key management
           </p>
         </div>
 
@@ -438,6 +462,11 @@ export default function AdminPanel() {
           label="Settings"
           active={activeSection === 'settings'}
           onClick={() => setActiveSection('settings')}
+        />
+        <SectionTab
+          label="API Keys"
+          active={activeSection === 'apiKeys'}
+          onClick={() => setActiveSection('apiKeys')}
         />
       </div>
 
@@ -817,6 +846,16 @@ export default function AdminPanel() {
             </div>
           </div>
         </SectionCard>
+      )}
+
+      {activeSection === 'apiKeys' && (
+        <ApiKeysSection
+          apiKeys={apiKeys}
+          setApiKeys={setApiKeys}
+          requestLogs={requestLogs}
+          setRequestLogs={setRequestLogs}
+          setActivityLogs={setActivityLogs}
+        />
       )}
 
       {(selectedTx || detailLoading || detailError) && (

@@ -1,6 +1,6 @@
 """
 TrustLens FastAPI API
-(MLP + Autoencoder + optional SHAP + MongoDB + Google Auth + Role-Based Access + .env)
+(MLP + Autoencoder + optional SHAP + MongoDB + Google Auth + Role-Based Access + API Key Management + .env)
 
 Put these files in the SAME folder as this app.py (backend/):
   - mlp_model.keras
@@ -24,9 +24,11 @@ Run:
 import os
 import json
 import logging
+import hashlib
+import secrets
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 
 # =============================================================================
@@ -54,8 +56,9 @@ from google.auth.transport import requests as google_requests
 # =============================================================================
 # FastAPI Framework Imports
 # =============================================================================
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------
@@ -100,11 +103,19 @@ MONGO_REPORT_COLLECTION = os.getenv("MONGO_REPORT_COLLECTION", "reports")
 MONGO_USER_COLLECTION = os.getenv("MONGO_USER_COLLECTION", "users")
 MONGO_SETTINGS_COLLECTION = os.getenv("MONGO_SETTINGS_COLLECTION", "settings")
 MONGO_ACTIVITY_COLLECTION = os.getenv("MONGO_ACTIVITY_COLLECTION", "activity_logs")
+MONGO_API_KEYS_COLLECTION = os.getenv("MONGO_API_KEYS_COLLECTION", "api_keys")
+MONGO_REQUEST_LOG_COLLECTION = os.getenv("MONGO_REQUEST_LOG_COLLECTION", "request_logs")
 
 # =============================================================================
 # Google Auth Configuration
 # =============================================================================
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+
+# =============================================================================
+# API Key Management Configuration
+# =============================================================================
+API_KEY_DEFAULT_EXPIRY_DAYS = int(os.getenv("API_KEY_DEFAULT_EXPIRY_DAYS", "180"))
+ADMIN_SETUP_KEY = os.getenv("ADMIN_SETUP_KEY", "change-me-in-env")
 
 # =============================================================================
 # Logging Configuration
@@ -139,6 +150,11 @@ mongo_report_collection = None
 mongo_user_collection = None
 mongo_settings_collection = None
 mongo_activity_collection = None
+mongo_api_keys_collection = None
+mongo_request_log_collection = None
+
+# Swagger-friendly bearer scheme
+bearer_scheme = HTTPBearer(auto_error=False)
 
 # =============================================================================
 # Role Configuration
@@ -245,6 +261,99 @@ def _serialize_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
     return convert(doc)
 
 # =============================================================================
+# API Key Helpers
+# =============================================================================
+def generate_api_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def build_token_preview(token: str) -> str:
+    if len(token) <= 12:
+        return token[:4] + "..."
+    return f"{token[:6]}...{token[-4:]}"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    if mongo_api_keys_collection is None:
+        raise HTTPException(status_code=503, detail="API key store is not available")
+
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    if credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid authorization scheme")
+
+    raw_token = credentials.credentials
+    key_hash = hash_token(raw_token)
+
+    key_doc = await mongo_api_keys_collection.find_one({"key_hash": key_hash})
+
+    if not key_doc:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    if key_doc.get("status") != "active":
+        raise HTTPException(status_code=403, detail="API key is inactive")
+
+    expires_at = key_doc.get("expires_at")
+    if isinstance(expires_at, datetime):
+        expires_at_cmp = expires_at
+        if expires_at_cmp.tzinfo is None:
+            expires_at_cmp = expires_at_cmp.replace(tzinfo=timezone.utc)
+        if expires_at_cmp < _utcnow():
+            raise HTTPException(status_code=403, detail="API key has expired")
+
+    await mongo_api_keys_collection.update_one(
+        {"_id": key_doc["_id"]},
+        {"$set": {"last_used_at": _utcnow()}}
+    )
+
+    return {
+        "key_id": str(key_doc["_id"]),
+        "client_name": key_doc.get("client_name", "unknown"),
+        "status": key_doc.get("status", "unknown"),
+        "token_preview": key_doc.get("token_preview"),
+    }
+
+
+async def verify_admin_setup_key(x_admin_setup_key: Optional[str] = Header(default=None)):
+    if not x_admin_setup_key:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Setup-Key header")
+    if x_admin_setup_key != ADMIN_SETUP_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin setup key")
+    return True
+
+
+async def log_request_event(
+    client_name: str,
+    endpoint: str,
+    method: str,
+    status: str,
+    details: Optional[dict] = None,
+):
+    if mongo_request_log_collection is None:
+        return
+
+    doc = {
+        "client_name": client_name,
+        "endpoint": endpoint,
+        "method": method,
+        "status": status,
+        "details": _sanitize_for_mongo(details or {}),
+        "created_at": datetime.utcnow(),
+    }
+    await mongo_request_log_collection.insert_one(doc)
+
+# =============================================================================
 # Human-Friendly Explanation Helpers
 # =============================================================================
 def _feature_label(name: str) -> str:
@@ -320,6 +429,14 @@ class AnalystNoteRequest(BaseModel):
 class SettingUpdate(BaseModel):
     key: str
     value: Any
+
+
+class ApiKeyCreateRequest(BaseModel):
+    client_name: str = Field(..., min_length=2, max_length=120)
+
+
+class ApiKeyStatusUpdateRequest(BaseModel):
+    status: str = Field(..., pattern="^(active|inactive)$")
 
 # =============================================================================
 # Asset Loading
@@ -553,13 +670,18 @@ def _build_text_reason(
 # =============================================================================
 # MongoDB Save Helpers
 # =============================================================================
-async def _save_prediction_to_mongo(tx: Transaction, response_payload: Dict[str, Any]) -> Optional[str]:
+async def _save_prediction_to_mongo(
+    tx: Transaction,
+    response_payload: Dict[str, Any],
+    client_name: str = "unknown",
+) -> Optional[str]:
     if mongo_tx_collection is None:
         return None
 
     doc = {
         "transaction_id": tx.transaction_id,
         "type": "predict",
+        "client_name": client_name,
         "input": {
             "Time": float(tx.Time),
             "V_features": [float(v) for v in tx.V_features],
@@ -587,13 +709,18 @@ async def _save_prediction_to_mongo(tx: Transaction, response_payload: Dict[str,
     return str(result.inserted_id)
 
 
-async def _save_report_to_mongo(req: ReportRequest, report_payload: Dict[str, Any]) -> Optional[str]:
+async def _save_report_to_mongo(
+    req: ReportRequest,
+    report_payload: Dict[str, Any],
+    client_name: str = "unknown",
+) -> Optional[str]:
     if mongo_report_collection is None:
         return None
 
     doc = {
         "transaction_id": req.transaction_id,
         "type": "report",
+        "client_name": client_name,
         "input": {
             "Time": float(req.Time),
             "V_features": [float(v) for v in req.V_features],
@@ -613,12 +740,16 @@ async def _save_report_to_mongo(req: ReportRequest, report_payload: Dict[str, An
     return str(result.inserted_id)
 
 
-async def _save_batch_to_mongo(batch_payload: Dict[str, Any]) -> Optional[str]:
+async def _save_batch_to_mongo(
+    batch_payload: Dict[str, Any],
+    client_name: str = "unknown",
+) -> Optional[str]:
     if mongo_tx_collection is None:
         return None
 
     doc = {
         "type": "predict_batch",
+        "client_name": client_name,
         "count": int(batch_payload.get("count", 0)),
         "sorted_by": batch_payload.get("sorted_by"),
         "thresholds": _sanitize_for_mongo(batch_payload.get("thresholds", {})),
@@ -636,6 +767,7 @@ async def _save_batch_to_mongo(batch_payload: Dict[str, Any]) -> Optional[str]:
 async def lifespan(app: FastAPI):
     global mongo_client, mongo_db, mongo_tx_collection, mongo_report_collection
     global mongo_user_collection, mongo_settings_collection, mongo_activity_collection
+    global mongo_api_keys_collection, mongo_request_log_collection
 
     try:
         mongo_client = AsyncMongoClient(
@@ -648,6 +780,8 @@ async def lifespan(app: FastAPI):
         mongo_user_collection = mongo_db[MONGO_USER_COLLECTION]
         mongo_settings_collection = mongo_db[MONGO_SETTINGS_COLLECTION]
         mongo_activity_collection = mongo_db[MONGO_ACTIVITY_COLLECTION]
+        mongo_api_keys_collection = mongo_db[MONGO_API_KEYS_COLLECTION]
+        mongo_request_log_collection = mongo_db[MONGO_REQUEST_LOG_COLLECTION]
 
         await mongo_client.admin.command("ping")
 
@@ -667,6 +801,15 @@ async def lifespan(app: FastAPI):
         await mongo_activity_collection.create_index("action")
         await mongo_settings_collection.create_index("key", unique=True)
 
+        await mongo_api_keys_collection.create_index("client_name")
+        await mongo_api_keys_collection.create_index("key_hash", unique=True)
+        await mongo_api_keys_collection.create_index("status")
+        await mongo_api_keys_collection.create_index("expires_at")
+
+        await mongo_request_log_collection.create_index("created_at")
+        await mongo_request_log_collection.create_index("client_name")
+        await mongo_request_log_collection.create_index("endpoint")
+
         logging.info("MongoDB connected successfully.")
 
     except Exception as e:
@@ -678,6 +821,8 @@ async def lifespan(app: FastAPI):
         mongo_user_collection = None
         mongo_settings_collection = None
         mongo_activity_collection = None
+        mongo_api_keys_collection = None
+        mongo_request_log_collection = None
 
     load_assets()
 
@@ -692,7 +837,7 @@ async def lifespan(app: FastAPI):
 # =============================================================================
 app = FastAPI(
     title="TrustLens API",
-    description="Fraud Detection with MLP + Autoencoder + XAI (Explainable AI) + MongoDB + Google Auth",
+    description="Fraud Detection with MLP + Autoencoder + XAI (Explainable AI) + MongoDB + Google Auth + API Key Management",
     lifespan=lifespan,
 )
 
@@ -712,6 +857,150 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# =============================================================================
+# API Key Management Endpoints
+# =============================================================================
+@app.post("/api-keys")
+async def create_api_key(
+    payload: ApiKeyCreateRequest,
+    _admin_ok: bool = Depends(verify_admin_setup_key),
+):
+    if mongo_api_keys_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB API key collection is not available")
+
+    raw_token = generate_api_token()
+    token_hash = hash_token(raw_token)
+    token_preview = build_token_preview(raw_token)
+    now = _utcnow()
+    expires_at = now + timedelta(days=API_KEY_DEFAULT_EXPIRY_DAYS)
+
+    doc = {
+        "client_name": payload.client_name.strip(),
+        "key_hash": token_hash,
+        "token_preview": token_preview,
+        "status": "active",
+        "created_at": now,
+        "expires_at": expires_at,
+        "last_used_at": None,
+        "shown_once": True,
+    }
+
+    result = await mongo_api_keys_collection.insert_one(doc)
+
+    await log_activity(
+        action="api_key_created",
+        actor="admin",
+        details={
+            "client_name": payload.client_name,
+            "api_key_id": str(result.inserted_id),
+            "expires_at": expires_at.isoformat(),
+            "token_preview": token_preview,
+        },
+    )
+
+    return {
+        "message": "API key created successfully. Copy and store this token now; it will not be shown again.",
+        "api_key_id": str(result.inserted_id),
+        "client_name": payload.client_name,
+        "status": "active",
+        "expires_in_days": API_KEY_DEFAULT_EXPIRY_DAYS,
+        "expires_at": expires_at.isoformat(),
+        "token_preview": token_preview,
+        "token": raw_token,
+    }
+
+
+@app.get("/api-keys")
+async def list_api_keys(
+    limit: int = 50,
+    _admin_ok: bool = Depends(verify_admin_setup_key),
+):
+    if mongo_api_keys_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB API key collection is not available")
+
+    limit = max(1, min(limit, 200))
+    cursor = mongo_api_keys_collection.find(
+        {},
+        {"key_hash": 0}
+    ).sort("created_at", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+
+    return {"count": len(docs), "items": [_serialize_doc(d) for d in docs]}
+
+
+@app.get("/api-keys/{api_key_id}")
+async def get_api_key_by_id(
+    api_key_id: str,
+    _admin_ok: bool = Depends(verify_admin_setup_key),
+):
+    if mongo_api_keys_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB API key collection is not available")
+
+    try:
+        doc = await mongo_api_keys_collection.find_one(
+            {"_id": ObjectId(api_key_id)},
+            {"key_hash": 0}
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid API key id")
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    return _serialize_doc(doc)
+
+
+@app.patch("/api-keys/{api_key_id}/status")
+async def update_api_key_status(
+    api_key_id: str,
+    payload: ApiKeyStatusUpdateRequest,
+    _admin_ok: bool = Depends(verify_admin_setup_key),
+):
+    if mongo_api_keys_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB API key collection is not available")
+
+    try:
+        result = await mongo_api_keys_collection.update_one(
+            {"_id": ObjectId(api_key_id)},
+            {"$set": {"status": payload.status, "updated_at": _utcnow()}}
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid API key id")
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    updated_doc = await mongo_api_keys_collection.find_one(
+        {"_id": ObjectId(api_key_id)},
+        {"key_hash": 0}
+    )
+
+    await log_activity(
+        action="api_key_status_updated",
+        actor="admin",
+        details={"api_key_id": api_key_id, "status": payload.status},
+    )
+
+    return {
+        "message": "API key status updated successfully",
+        "item": _serialize_doc(updated_doc),
+    }
+
+
+@app.get("/request-logs")
+async def get_request_logs(
+    limit: int = 50,
+    _admin_ok: bool = Depends(verify_admin_setup_key),
+):
+    if mongo_request_log_collection is None:
+        raise HTTPException(status_code=503, detail="MongoDB request log collection is not available")
+
+    limit = max(1, min(limit, 200))
+    cursor = mongo_request_log_collection.find().sort("created_at", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+
+    return {"count": len(docs), "items": [_serialize_doc(d) for d in docs]}
 
 # =============================================================================
 # Google Authentication Endpoints
@@ -864,7 +1153,12 @@ async def update_user_role(user_id: str, payload: UpdateUserRoleRequest):
 # API Endpoint: Single Transaction Prediction
 # =============================================================================
 @app.post("/predict")
-async def predict(tx: Transaction, background_tasks: BackgroundTasks):
+async def predict(
+    tx: Transaction,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    client=Depends(verify_api_key),
+):
     if mlp_model is None or ae_model is None or scaler is None:
         raise HTTPException(
             status_code=503,
@@ -945,12 +1239,13 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
             )
 
         logging.info(
-            f"predict: tx_id={tx.transaction_id} p_raw={p_raw:.6f} p_fraud={p_fraud:.6f} "
+            f"predict: client={client['client_name']} tx_id={tx.transaction_id} p_raw={p_raw:.6f} p_fraud={p_fraud:.6f} "
             f"re={re_err:.6f} anom={anomaly_score:.6f} combined={combined_score:.6f} is_fraud={is_fraud}"
         )
 
         response = {
             "transaction_id": tx.transaction_id,
+            "client_name": client["client_name"],
             "is_fraud": bool(is_fraud),
             "status": "BLOCKED" if is_fraud else "APPROVED",
             "risk_score": round(risk_score_pct, 2),
@@ -970,12 +1265,12 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
             "ae_xai_data": recon_data,
         }
 
-        mongo_id = await _save_prediction_to_mongo(tx, response)
+        mongo_id = await _save_prediction_to_mongo(tx, response, client_name=client["client_name"])
         response["mongo_id"] = mongo_id
 
         await log_activity(
             action="transaction_predicted",
-            actor="system",
+            actor=client["client_name"],
             details={
                 "transaction_id": tx.transaction_id,
                 "mongo_id": mongo_id,
@@ -984,9 +1279,28 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
             },
         )
 
+        await log_request_event(
+            client_name=client["client_name"],
+            endpoint=str(request.url.path),
+            method=request.method,
+            status="success",
+            details={
+                "transaction_id": tx.transaction_id,
+                "mongo_id": mongo_id,
+                "decision": response["status"],
+            },
+        )
+
         return response
 
     except Exception as e:
+        await log_request_event(
+            client_name=client["client_name"],
+            endpoint=str(request.url.path),
+            method=request.method,
+            status="error",
+            details={"error": str(e), "transaction_id": tx.transaction_id},
+        )
         logging.error(f"Prediction Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal analysis failure: {str(e)}")
 
@@ -994,7 +1308,11 @@ async def predict(tx: Transaction, background_tasks: BackgroundTasks):
 # API Endpoint: Batch Transaction Prediction
 # =============================================================================
 @app.post("/predict_batch")
-async def predict_batch(req: BatchRequest):
+async def predict_batch(
+    req: BatchRequest,
+    request: Request,
+    client=Depends(verify_api_key),
+):
     if mlp_model is None or ae_model is None or scaler is None:
         raise HTTPException(
             status_code=503,
@@ -1098,6 +1416,7 @@ async def predict_batch(req: BatchRequest):
         results.sort(key=lambda x: x["risk_score"], reverse=True)
 
         batch_response = {
+            "client_name": client["client_name"],
             "count": len(results),
             "sorted_by": "risk_score_desc",
             "thresholds": {
@@ -1109,18 +1428,33 @@ async def predict_batch(req: BatchRequest):
             "results": results,
         }
 
-        mongo_id = await _save_batch_to_mongo(batch_response)
+        mongo_id = await _save_batch_to_mongo(batch_response, client_name=client["client_name"])
         batch_response["mongo_id"] = mongo_id
 
         await log_activity(
             action="batch_prediction",
-            actor="system",
+            actor=client["client_name"],
+            details={"count": len(results), "mongo_id": mongo_id},
+        )
+
+        await log_request_event(
+            client_name=client["client_name"],
+            endpoint=str(request.url.path),
+            method=request.method,
+            status="success",
             details={"count": len(results), "mongo_id": mongo_id},
         )
 
         return batch_response
 
     except Exception as e:
+        await log_request_event(
+            client_name=client["client_name"],
+            endpoint=str(request.url.path),
+            method=request.method,
+            status="error",
+            details={"error": str(e)},
+        )
         logging.error(f"Batch Prediction Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
 
@@ -1128,7 +1462,11 @@ async def predict_batch(req: BatchRequest):
 # API Endpoint: Detailed Fraud Analysis Report
 # =============================================================================
 @app.post("/report")
-async def report(req: ReportRequest):
+async def report(
+    req: ReportRequest,
+    request: Request,
+    client=Depends(verify_api_key),
+):
     if mlp_model is None or ae_model is None or scaler is None:
         raise HTTPException(
             status_code=503,
@@ -1212,6 +1550,7 @@ async def report(req: ReportRequest):
 
         card: Dict[str, Any] = {
             "transaction_id": req.transaction_id,
+            "client_name": client["client_name"],
             "decision": decision,
             "risk_score": round(combined_score * 100.0, 2),
             "confidence": round(confidence, 3),
@@ -1256,12 +1595,24 @@ async def report(req: ReportRequest):
                 "Amount": float(req.Amount),
             }
 
-        mongo_id = await _save_report_to_mongo(req, card)
+        mongo_id = await _save_report_to_mongo(req, card, client_name=client["client_name"])
         card["mongo_id"] = mongo_id
 
         await log_activity(
             action="report_generated",
-            actor="system",
+            actor=client["client_name"],
+            details={
+                "transaction_id": req.transaction_id,
+                "mongo_id": mongo_id,
+                "decision": decision,
+            },
+        )
+
+        await log_request_event(
+            client_name=client["client_name"],
+            endpoint=str(request.url.path),
+            method=request.method,
+            status="success",
             details={
                 "transaction_id": req.transaction_id,
                 "mongo_id": mongo_id,
@@ -1272,6 +1623,13 @@ async def report(req: ReportRequest):
         return card
 
     except Exception as e:
+        await log_request_event(
+            client_name=client["client_name"],
+            endpoint=str(request.url.path),
+            method=request.method,
+            status="error",
+            details={"error": str(e), "transaction_id": req.transaction_id},
+        )
         logging.error(f"Report Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
@@ -1408,6 +1766,8 @@ def health():
             "user_collection": MONGO_USER_COLLECTION,
             "settings_collection": MONGO_SETTINGS_COLLECTION,
             "activity_collection": MONGO_ACTIVITY_COLLECTION,
+            "api_keys_collection": MONGO_API_KEYS_COLLECTION,
+            "request_log_collection": MONGO_REQUEST_LOG_COLLECTION,
         },
         "paths": {
             "base_dir": str(BASE_DIR),
@@ -1435,6 +1795,8 @@ def health():
             "MONGO_URI_SET": bool(os.getenv("MONGO_URI")),
             "MONGO_DB_NAME": MONGO_DB_NAME,
             "GOOGLE_CLIENT_ID_SET": bool(GOOGLE_CLIENT_ID),
+            "ADMIN_SETUP_KEY_SET": bool(ADMIN_SETUP_KEY and ADMIN_SETUP_KEY != "change-me-in-env"),
+            "API_KEY_DEFAULT_EXPIRY_DAYS": API_KEY_DEFAULT_EXPIRY_DAYS,
         },
         "last_init_error": last_init_error,
     }

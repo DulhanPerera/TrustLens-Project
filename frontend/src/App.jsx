@@ -4,17 +4,17 @@ import {
   LayoutDashboard,
   Database,
   UserCheck,
-  Zap,
   MessageSquareText,
   Activity,
   ArrowRight,
   X,
   LogOut,
+  CircleDollarSign,
+  AlertTriangle,
+  Gauge,
 } from 'lucide-react';
-import XAIChart from './components/XAIChart';
 import GoogleLoginButton from './components/GoogleLoginButton';
 import AdminPanel from './pages/AdminPanel';
-import { getFraudPrediction } from './api';
 
 const API_BASE = 'http://127.0.0.1:8000';
 
@@ -41,7 +41,6 @@ function mapBackendTransactionToUI(doc) {
 
     thresholds: doc.thresholds || {},
     explanation: doc.explanation || 'No explanation available.',
-    chartData: doc.xai_data || [],
     ae_xai_data: doc.ae_xai_data || [],
 
     raw_doc: doc,
@@ -90,13 +89,49 @@ function HealthStatusItem({ label, ok, loading }) {
   );
 }
 
+function MonitorKPI({ title, value, subtitle, icon: Icon, tone = 'slate' }) {
+  const toneMap = {
+    slate: 'bg-white border-slate-200 text-slate-800',
+    green: 'bg-white border-green-200 text-green-700',
+    red: 'bg-white border-red-200 text-red-700',
+    blue: 'bg-white border-blue-200 text-blue-700',
+    amber: 'bg-white border-amber-200 text-amber-700',
+  };
+
+  return (
+    <div className={`rounded-2xl border p-5 shadow-sm ${toneMap[tone] || toneMap.slate}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">
+            {title}
+          </p>
+          <div className="text-2xl font-black tracking-tight">{value}</div>
+          {subtitle ? (
+            <p className="mt-2 text-xs font-semibold text-slate-500">{subtitle}</p>
+          ) : null}
+        </div>
+
+        <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+          <Icon size={18} className="text-slate-600" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getFinalRiskLevel(score) {
+  const value = Number(score) || 0;
+  if (value >= 70) return 'HIGH';
+  if (value >= 40) return 'MEDIUM';
+  return 'LOW';
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('trustlens_user');
     return saved ? JSON.parse(saved) : null;
   });
 
-  const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState(() => {
     const saved = localStorage.getItem('trustlens_user');
     if (!saved) return 'dashboard';
@@ -202,63 +237,6 @@ export default function App() {
       return () => clearInterval(interval);
     }
   }, [user]);
-
-  const handleAnalysis = async () => {
-    setLoading(true);
-
-    const simulateFraud = Math.random() < 0.3;
-
-    let inputData;
-    if (simulateFraud) {
-      inputData = {
-        transaction_id: `TXN-${Date.now()}`,
-        Time: Math.floor(Math.random() * 500),
-        V_features: Array(28)
-          .fill(0)
-          .map((_, i) => {
-            if ([3, 9, 11, 13].includes(i)) {
-              return (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 5 + 3);
-            }
-            return (Math.random() - 0.5) * 6;
-          }),
-        Amount: parseFloat((Math.random() * 2000 + 500).toFixed(2)),
-      };
-    } else {
-      inputData = {
-        transaction_id: `TXN-${Date.now()}`,
-        Time: Math.floor(Math.random() * 500),
-        V_features: Array(28)
-          .fill(0)
-          .map(() => (Math.random() - 0.5) * 2),
-        Amount: parseFloat((Math.random() * 150).toFixed(2)),
-      };
-    }
-
-    try {
-      const response = await getFraudPrediction(inputData);
-
-      const newTx = {
-        id: response.mongo_id || Date.now(),
-        mongo_id: response.mongo_id || null,
-        transaction_id: response.transaction_id || inputData.transaction_id,
-        ...inputData,
-        ...response,
-        chartData: response.xai_data || [],
-        ae_xai_data: response.ae_xai_data || [],
-        thresholds: response.thresholds || {},
-        created_at: new Date().toISOString(),
-        time_captured: new Date().toLocaleTimeString(),
-        date_captured: new Date().toLocaleDateString(),
-      };
-
-      setHistory((prev) => [newTx, ...prev]);
-      setActiveTab('dashboard');
-    } catch (err) {
-      console.error('API Error:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const openTransactionDetails = async (tx) => {
     if (!tx?.mongo_id) {
@@ -482,6 +460,13 @@ export default function App() {
     );
   }
 
+  const currentDecisionTone =
+    latestTx?.status === 'BLOCKED'
+      ? 'red'
+      : latestTx?.status === 'APPROVED'
+      ? 'green'
+      : 'blue';
+
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans">
       <aside className="w-64 bg-slate-900 text-white fixed h-full z-20 shadow-xl flex flex-col">
@@ -569,30 +554,21 @@ export default function App() {
       <main className="flex-1 ml-64 p-8 w-full overflow-x-hidden">
         {activeTab === 'dashboard' && (
           <div className="w-full space-y-6 animate-in fade-in duration-500">
-            <header className="flex justify-between items-center mb-8 border-b border-slate-200 pb-5">
+            <header className="mb-6 border-b border-slate-200 pb-5">
               <div>
                 <h1 className="text-3xl font-black text-slate-800 tracking-tight">
-                  Real-time Monitor
+                  Fraud Monitoring Console
                 </h1>
                 <p className="text-slate-500 text-sm font-medium">
-                  Deep Learning Fraud Detection Intelligence
+                  Live view of the latest scored transaction and analyst-ready metrics
                 </p>
               </div>
-
-              <button
-                onClick={handleAnalysis}
-                disabled={loading}
-                className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-blue-700 transition flex items-center gap-2 active:scale-95"
-              >
-                <Zap size={18} fill="currentColor" />
-                {loading ? 'Analyzing...' : 'Trigger Live Scan'}
-              </button>
             </header>
 
             {!latestTx ? (
-              <div className="w-full bg-white border-2 border-dashed border-slate-200 rounded-[2rem] p-24 flex flex-col items-center justify-center text-slate-300">
-                <Activity size={64} className="mb-4 animate-pulse" />
-                <h2 className="text-xl font-black uppercase tracking-widest">
+              <div className="w-full bg-white border border-slate-200 rounded-[2rem] p-24 flex flex-col items-center justify-center text-slate-300 shadow-sm">
+                <Activity size={56} className="mb-4 animate-pulse" />
+                <h2 className="text-lg font-black uppercase tracking-widest">
                   {loadingLogs ? 'Loading Saved Transactions...' : 'System Ready'}
                 </h2>
                 {logsError && (
@@ -600,64 +576,271 @@ export default function App() {
                 )}
               </div>
             ) : (
-              <div className="w-full space-y-6">
-                <section
-                  className={`w-full p-8 rounded-[2rem] shadow-lg flex items-center justify-between text-white border-b-4 ${
-                    latestTx.is_fraud
-                      ? 'bg-red-600 border-red-800'
-                      : 'bg-green-600 border-green-800'
-                  }`}
-                >
-                  <div className="flex items-center gap-6">
-                    <ShieldAlert size={56} className="bg-white/20 p-3 rounded-full shadow-inner" />
-                    <div>
-                      <h2 className="text-5xl font-black italic uppercase leading-none tracking-tighter">
-                        {latestTx.status}
-                      </h2>
-                      <p className="text-xs font-black opacity-80 uppercase mt-2 tracking-widest">
-                        Model Confidence: {latestTx.risk_score}%
-                      </p>
+              <div className="space-y-6">
+                <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <MonitorKPI
+                    title="Current Decision"
+                    value={latestTx.status}
+                    subtitle={latestTx.transaction_id || 'Latest transaction'}
+                    icon={AlertTriangle}
+                    tone={currentDecisionTone}
+                  />
+
+                  <MonitorKPI
+                    title="Risk Score"
+                    value={`${latestTx.risk_score}%`}
+                    subtitle="Combined model output"
+                    icon={Gauge}
+                    tone="blue"
+                  />
+
+                  <MonitorKPI
+                    title="Transaction Amount"
+                    value={`$${latestTx.Amount}`}
+                    subtitle={latestTx.date_captured}
+                    icon={CircleDollarSign}
+                    tone="slate"
+                  />
+                </section>
+
+                <section className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+                  <div className="bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
+                      <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-500">
+                        Latest Transaction Decision
+                      </h3>
+                    </div>
+
+                    <div className="p-6 space-y-6">
+                      <div
+                        className={`rounded-[1.5rem] p-6 text-white ${
+                          latestTx.is_fraud ? 'bg-red-600' : 'bg-green-600'
+                        }`}
+                      >
+                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+                          <div className="flex items-center gap-4">
+                            <div className="bg-white/15 rounded-2xl p-3">
+                              <ShieldAlert size={32} />
+                            </div>
+                            <div>
+                              <div className="text-4xl font-black italic uppercase leading-none">
+                                {latestTx.status}
+                              </div>
+                              <p className="mt-2 text-xs uppercase tracking-[0.2em] font-black opacity-85">
+                                {latestTx.transaction_id || 'No transaction id'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4 md:min-w-[280px]">
+                            <div className="bg-black/10 rounded-2xl p-4 border border-white/10">
+                              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/70">
+                                Amount
+                              </p>
+                              <p className="mt-2 text-2xl font-black">${latestTx.Amount}</p>
+                            </div>
+                            <div className="bg-black/10 rounded-2xl p-4 border border-white/10">
+                              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/70">
+                                Risk
+                              </p>
+                              <p className="mt-2 text-2xl font-black">{latestTx.risk_score}%</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">
+                            Transaction Metadata
+                          </p>
+                          <div className="space-y-3 text-sm">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-slate-500 font-semibold">Captured Date</span>
+                              <span className="text-slate-800 font-bold">{latestTx.date_captured}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-slate-500 font-semibold">Captured Time</span>
+                              <span className="text-slate-800 font-bold">{latestTx.time_captured}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-slate-500 font-semibold">Time Feature</span>
+                              <span className="text-slate-800 font-bold">{latestTx.Time}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">
+                            Decision Metrics
+                          </p>
+                          <div className="space-y-3 text-sm">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-slate-500 font-semibold">Fraud Probability</span>
+                              <span className="text-slate-800 font-bold">
+                                {Number(latestTx.fraud_prob || 0).toFixed(4)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-slate-500 font-semibold">Anomaly Score</span>
+                              <span className="text-slate-800 font-bold">
+                                {Number(latestTx.anomaly_score || 0).toFixed(4)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-slate-500 font-semibold">Combined Score</span>
+                              <span className="text-slate-800 font-bold">
+                                {Number(latestTx.combined_score || 0).toFixed(4)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="text-right bg-black/10 px-6 py-3 rounded-2xl border border-white/10">
-                    <p className="text-white/60 text-[10px] font-black uppercase tracking-widest">
-                      Captured Amount
-                    </p>
-                    <p className="text-4xl font-black font-mono leading-none">
-                      ${latestTx.Amount}
-                    </p>
+                  <div className="bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
+                      <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
+                        <MessageSquareText size={16} className="text-blue-500" />
+                        Analyst Decision Panel
+                      </h3>
+                    </div>
+
+                    <div className="p-6 space-y-5">
+                      <div className="rounded-2xl bg-slate-50 border border-slate-200 p-5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4">
+                          Explanation Summary
+                        </p>
+
+                        <div className="space-y-4 text-sm">
+                          <div>
+                            <p className="text-slate-400 font-black uppercase tracking-wider text-[10px] mb-1">
+                              Time
+                            </p>
+                            <p className="text-slate-800 font-semibold">{latestTx.Time}</p>
+                          </div>
+
+                          <div>
+                            <p className="text-slate-400 font-black uppercase tracking-wider text-[10px] mb-1">
+                              Amount
+                            </p>
+                            <p className="text-slate-800 font-semibold">${latestTx.Amount}</p>
+                          </div>
+
+                          <div>
+                            <p className="text-slate-400 font-black uppercase tracking-wider text-[10px] mb-1">
+                              Explanation
+                            </p>
+                            <p className="text-slate-800 font-semibold leading-relaxed">
+                              {latestTx.explanation}
+                            </p>
+                          </div>
+
+                          <div>
+                            <p className="text-slate-400 font-black uppercase tracking-wider text-[10px] mb-1">
+                              Final Risk Level
+                            </p>
+                            <p className="text-slate-800 font-semibold">
+                              {getFinalRiskLevel(latestTx.risk_score)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 p-5">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">
+                          Threshold Snapshot
+                        </p>
+                        <div className="space-y-3 text-sm">
+                          <div className="flex items-center justify-between gap-4">
+                            <span className="text-slate-500 font-semibold">Combined Threshold</span>
+                            <span className="text-slate-800 font-bold">
+                              {latestTx.thresholds?.combined_thr ?? '-'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span className="text-slate-500 font-semibold">AE Threshold</span>
+                            <span className="text-slate-800 font-bold">
+                              {latestTx.thresholds?.ae_thr ?? '-'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <span className="text-slate-500 font-semibold">Model Output Type</span>
+                            <span className="text-slate-800 font-bold">
+                              {String(latestTx.thresholds?.model_output_is_fraud ?? '-')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </section>
 
-                <section className="bg-white p-10 rounded-[2rem] shadow-sm border border-slate-200 w-full">
-                  <div className="flex justify-between items-center mb-10">
-                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                      <MessageSquareText size={16} className="text-blue-500" /> Explainable AI (XAI)
-                    </h3>
+                <section className="bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-500">
+                        Recent Scored Transactions
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Most recent entries from the backend transaction archive
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => setActiveTab('logs')}
+                      className="text-xs font-bold uppercase tracking-wider text-blue-600 hover:text-blue-700 transition"
+                    >
+                      View Full Archive
+                    </button>
                   </div>
 
-                  <div className="space-y-12">
-                    <div className="space-y-6">
-                      <p className="text-3xl font-extrabold text-slate-800 border-l-[12px] border-blue-500 pl-8 leading-[1.15]">
-                        {latestTx.explanation}
-                      </p>
-
-                      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 text-base text-slate-600 font-medium leading-relaxed">
-                        The neural network flagged this transaction due to extreme variance in
-                        latent PCA components. This interpretability helps analysts verify the
-                        decision with more confidence.
-                      </div>
-                    </div>
-
-                    <div className="pt-10 border-t border-slate-100">
-                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">
-                        SHAP Feature Contribution Analysis
-                      </h4>
-                      <div className="bg-slate-50/50 p-8 rounded-[2rem] border border-slate-100">
-                        <XAIChart explanationData={latestTx.chartData || []} />
-                      </div>
-                    </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-white text-slate-400 uppercase text-[10px] font-black border-b border-slate-100">
+                        <tr>
+                          <th className="px-6 py-4">Time</th>
+                          <th className="px-6 py-4">Transaction ID</th>
+                          <th className="px-6 py-4">Amount</th>
+                          <th className="px-6 py-4">Decision</th>
+                          <th className="px-6 py-4 text-right">Risk</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm">
+                        {history.slice(0, 6).map((tx) => (
+                          <tr
+                            key={tx.id}
+                            onClick={() => openTransactionDetails(tx)}
+                            className="hover:bg-slate-50 transition cursor-pointer"
+                          >
+                            <td className="px-6 py-4 text-slate-500 font-mono text-xs">
+                              {tx.date_captured} {tx.time_captured}
+                            </td>
+                            <td className="px-6 py-4 font-semibold text-slate-800">
+                              {tx.transaction_id || tx.id}
+                            </td>
+                            <td className="px-6 py-4 text-slate-700 font-semibold">
+                              ${tx.Amount}
+                            </td>
+                            <td className="px-6 py-4">
+                              <span
+                                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase border ${
+                                  tx.is_fraud
+                                    ? 'bg-red-50 text-red-600 border-red-100'
+                                    : 'bg-green-50 text-green-600 border-green-100'
+                                }`}
+                              >
+                                {tx.status}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right font-mono font-black text-slate-600">
+                              {tx.risk_score}%
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </section>
               </div>
@@ -667,13 +850,13 @@ export default function App() {
 
         {activeTab === 'logs' && (
           <div className="w-full space-y-6 animate-in slide-in-from-right-4 duration-500">
-            <header className="mb-8 border-b border-slate-200 pb-5 flex items-center justify-between">
+            <header className="mb-6 border-b border-slate-200 pb-5 flex items-center justify-between">
               <div>
                 <h1 className="text-3xl font-black text-slate-800 tracking-tight">
                   Audit Archive
                 </h1>
                 <p className="text-slate-500 text-sm font-medium tracking-tight">
-                  Click a transaction to view full details
+                  Click a transaction to inspect the stored fraud record
                 </p>
               </div>
 
@@ -687,25 +870,26 @@ export default function App() {
 
             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden w-full">
               <table className="w-full text-left">
-                <thead className="bg-slate-50 text-slate-400 uppercase text-[10px] font-black border-b">
+                <thead className="bg-slate-50 text-slate-400 uppercase text-[10px] font-black border-b border-slate-100">
                   <tr>
-                    <th className="px-10 py-5">Timestamp</th>
-                    <th className="px-10 py-5">Transaction Amount</th>
-                    <th className="px-10 py-5 text-center">System Status</th>
-                    <th className="px-10 py-5 text-right">Confidence Score</th>
+                    <th className="px-6 py-4">Timestamp</th>
+                    <th className="px-6 py-4">Transaction ID</th>
+                    <th className="px-6 py-4">Amount</th>
+                    <th className="px-6 py-4 text-center">Decision</th>
+                    <th className="px-6 py-4 text-right">Risk Score</th>
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-slate-100 text-sm font-medium">
+                <tbody className="divide-y divide-slate-100 text-sm">
                   {loadingLogs ? (
                     <tr>
-                      <td colSpan="4" className="px-10 py-24 text-center text-slate-400 font-bold">
+                      <td colSpan="5" className="px-6 py-20 text-center text-slate-400 font-bold">
                         Loading transactions...
                       </td>
                     </tr>
                   ) : history.length === 0 ? (
                     <tr>
-                      <td colSpan="4" className="px-10 py-24 text-center text-slate-300 italic font-bold">
+                      <td colSpan="5" className="px-6 py-20 text-center text-slate-300 italic font-bold">
                         No saved logs found in MongoDB.
                       </td>
                     </tr>
@@ -714,19 +898,23 @@ export default function App() {
                       <tr
                         key={tx.id}
                         onClick={() => openTransactionDetails(tx)}
-                        className="hover:bg-blue-50/40 transition duration-300 group cursor-pointer"
+                        className="hover:bg-slate-50 transition group cursor-pointer"
                       >
-                        <td className="px-10 py-5 font-mono text-xs text-slate-400 group-hover:text-blue-600 transition-colors font-bold">
+                        <td className="px-6 py-4 font-mono text-xs text-slate-500 group-hover:text-blue-600 transition-colors font-bold">
                           {tx.date_captured} {tx.time_captured}
                         </td>
 
-                        <td className="px-10 py-5 text-slate-800 font-black text-base">
+                        <td className="px-6 py-4 text-slate-800 font-semibold">
+                          {tx.transaction_id || tx.id}
+                        </td>
+
+                        <td className="px-6 py-4 text-slate-800 font-black">
                           ${tx.Amount}
                         </td>
 
-                        <td className="px-10 py-5 text-center">
+                        <td className="px-6 py-4 text-center">
                           <span
-                            className={`px-4 py-1 rounded-full text-[10px] font-black uppercase shadow-sm border ${
+                            className={`px-3 py-1 rounded-full text-[10px] font-black uppercase shadow-sm border ${
                               tx.is_fraud
                                 ? 'bg-red-50 text-red-600 border-red-100'
                                 : 'bg-green-50 text-green-600 border-green-100'
@@ -736,7 +924,7 @@ export default function App() {
                           </span>
                         </td>
 
-                        <td className="px-10 py-5 text-right font-mono text-slate-400 group-hover:text-slate-900 transition-all font-black">
+                        <td className="px-6 py-4 text-right font-mono text-slate-500 group-hover:text-slate-900 transition-all font-black">
                           {tx.risk_score}%{' '}
                           <ArrowRight
                             size={14}
@@ -849,16 +1037,6 @@ export default function App() {
                     <h3 className="text-lg font-black text-slate-800 mb-4">Thresholds</h3>
                     <pre className="text-sm text-slate-700 whitespace-pre-wrap overflow-x-auto">
                       {JSON.stringify(selectedTx.thresholds || {}, null, 2)}
-                    </pre>
-                  </section>
-
-                  <section className="bg-slate-50 border border-slate-200 rounded-[1.5rem] p-6">
-                    <h3 className="text-lg font-black text-slate-800 mb-4">SHAP Explanation</h3>
-                    <div className="mb-6">
-                      <XAIChart explanationData={selectedTx.chartData || []} />
-                    </div>
-                    <pre className="text-sm text-slate-700 whitespace-pre-wrap overflow-x-auto">
-                      {JSON.stringify(selectedTx.chartData || [], null, 2)}
                     </pre>
                   </section>
 
