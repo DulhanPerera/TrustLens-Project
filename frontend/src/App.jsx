@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ShieldAlert,
   LayoutDashboard,
@@ -20,6 +20,7 @@ const API_BASE = 'http://127.0.0.1:8000';
 
 function mapBackendTransactionToUI(doc) {
   const createdAt = doc.created_at ? new Date(doc.created_at) : new Date();
+  const output = doc.output || {};
 
   return {
     id: doc._id || doc.mongo_id || Date.now(),
@@ -31,19 +32,21 @@ function mapBackendTransactionToUI(doc) {
     Amount: doc.input?.Amount ?? 0,
 
     is_fraud: Boolean(doc.is_fraud),
-    status: doc.status || 'UNKNOWN',
+    status: doc.status || output.status || 'UNKNOWN',
     risk_score: doc.risk_score ?? 0,
-    mlp_prob_raw: doc.mlp_prob_raw ?? 0,
-    fraud_prob: doc.fraud_prob ?? 0,
-    recon_error: doc.recon_error ?? 0,
-    anomaly_score: doc.anomaly_score ?? 0,
-    combined_score: doc.combined_score ?? 0,
+    mlp_prob_raw: output.mlp_prob_raw ?? doc.mlp_prob_raw ?? 0,
+    fraud_prob: output.fraud_prob ?? doc.fraud_prob ?? 0,
+    recon_error: output.recon_error ?? doc.recon_error ?? 0,
+    anomaly_score: output.anomaly_score ?? doc.anomaly_score ?? 0,
+    combined_score: output.combined_score ?? doc.combined_score ?? 0,
 
-    thresholds: doc.thresholds || {},
-    explanation: doc.explanation || 'No explanation available.',
-    ae_xai_data: doc.ae_xai_data || [],
+    thresholds: output.thresholds || doc.thresholds || {},
+    explanation: output.explanation || doc.explanation || 'No explanation available.',
+    ae_xai_data: output.ae_xai_data || doc.ae_xai_data || [],
+    xai_data: output.xai_data || doc.xai_data || [],
 
     raw_doc: doc,
+    output,
     created_at: doc.created_at || null,
     time_captured: createdAt.toLocaleTimeString(),
     date_captured: createdAt.toLocaleDateString(),
@@ -89,7 +92,9 @@ function HealthStatusItem({ label, ok, loading }) {
   );
 }
 
-function MonitorKPI({ title, value, subtitle, icon: Icon, tone = 'slate' }) {
+function MonitorKPI({ title, value, subtitle, icon, tone = 'slate' }) {
+  const KPIIcon = icon;
+
   const toneMap = {
     slate: 'bg-white border-slate-200 text-slate-800',
     green: 'bg-white border-green-200 text-green-700',
@@ -112,7 +117,7 @@ function MonitorKPI({ title, value, subtitle, icon: Icon, tone = 'slate' }) {
         </div>
 
         <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-          <Icon size={18} className="text-slate-600" />
+          <KPIIcon size={18} className="text-slate-600" />
         </div>
       </div>
     </div>

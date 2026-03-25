@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   updateUserRole as updateUserRoleApi,
   markTransactionLegitimate as markTransactionLegitimateApi,
@@ -238,7 +238,21 @@ export default function AdminPanel() {
       }
 
       const data = await res.json();
-      setSelectedTx(data);
+      const output = data.output || {};
+      setSelectedTx({
+        ...data,
+        status: data.status || output.status || 'UNKNOWN',
+        risk_score: data.risk_score ?? output.risk_score ?? 0,
+        mlp_prob_raw: output.mlp_prob_raw ?? data.mlp_prob_raw ?? 0,
+        fraud_prob: output.fraud_prob ?? data.fraud_prob ?? 0,
+        recon_error: output.recon_error ?? data.recon_error ?? 0,
+        anomaly_score: output.anomaly_score ?? data.anomaly_score ?? 0,
+        combined_score: output.combined_score ?? data.combined_score ?? 0,
+        explanation: output.explanation || data.explanation || 'No explanation available.',
+        thresholds: output.thresholds || data.thresholds || {},
+        ae_xai_data: output.ae_xai_data || data.ae_xai_data || [],
+        xai_data: output.xai_data || data.xai_data || [],
+      });
       setNoteText('');
     } catch (err) {
       console.error(err);
@@ -262,7 +276,18 @@ export default function AdminPanel() {
       }
 
       const data = await res.json();
-      setSelectedReport(data);
+      const output = data.output || {};
+      setSelectedReport({
+        ...data,
+        decision: data.decision || output.decision || 'REPORT',
+        risk_score: data.risk_score ?? output.risk_score ?? 0,
+        confidence: output.confidence ?? data.confidence ?? 0,
+        signals: output.signals || data.signals || {},
+        thresholds: output.thresholds || data.thresholds || {},
+        explanations: output.explanations || data.explanations || {},
+        input: data.input || output.input || {},
+        meta: output.meta || data.meta || {},
+      });
     } catch (err) {
       console.error(err);
       setReportError('Failed to load report details.');

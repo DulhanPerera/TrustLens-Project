@@ -122,18 +122,6 @@ export const getApiKeys = async (limit = 50) => {
   }
 };
 
-export const getApiKeyById = async (apiKeyId) => {
-  try {
-    const response = await api.get(`/api-keys/${apiKeyId}`, {
-      headers: getAdminHeaders(),
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Get API Key By ID Error:', error);
-    throw error;
-  }
-};
-
 export const updateApiKeyStatus = async (apiKeyId, status) => {
   try {
     const response = await api.patch(
@@ -161,18 +149,3 @@ export const getRequestLogs = async (limit = 50) => {
     throw error;
   }
 };
-
-// -----------------------------
-// Health
-// -----------------------------
-export const getHealthStatus = async () => {
-  try {
-    const response = await api.get('/health');
-    return response.data;
-  } catch (error) {
-    console.error('Health Check Error:', error);
-    throw error;
-  }
-};
-
-export default api;

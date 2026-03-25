@@ -11,6 +11,7 @@
 fastapi>=0.100.0              # FastAPI web framework for REST API
 uvicorn[standard]>=0.23.0     # ASGI server to run FastAPI (includes websockets, watchfiles)
 pydantic>=2.0.0               # Data validation and settings management
+python-dotenv>=1.0.0          # Load environment variables from .env files
 
 # -----------------------------------------------------------------------------
 # Machine Learning & Deep Learning
@@ -30,6 +31,12 @@ joblib>=1.3.0                 # Serialization for sklearn objects (.joblib files
 # Explainable AI (XAI)
 # -----------------------------------------------------------------------------
 shap>=0.42.0                  # SHAP (SHapley Additive exPlanations) for model interpretability
+
+# -----------------------------------------------------------------------------
+# Database & Authentication
+# -----------------------------------------------------------------------------
+pymongo>=4.8.0                # MongoDB driver with async client support
+google-auth>=2.30.0           # Google ID token verification
 
 # -----------------------------------------------------------------------------
 # Optional: Development & Testing
