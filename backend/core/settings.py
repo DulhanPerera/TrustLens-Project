@@ -1,3 +1,8 @@
+"""
+This file collects the app settings in one place.
+Most values come from env vars, with safe defaults as backup.
+"""
+
 import os
 from pathlib import Path
 
@@ -26,6 +31,7 @@ ALT_SCALER = core_config.alt_scaler_paths
 
 
 def _env_path(name: str, default: Path) -> Path:
+    # Turn relative paths into full paths from the backend folder.
     raw_value = os.getenv(name, str(default))
     candidate = Path(raw_value).expanduser()
     if candidate.is_absolute():
@@ -56,6 +62,7 @@ ALLOWED_ADMIN_ROLES = {"admin", "analyst"}
 ALLOWED_USER_ROLES = {"admin", "analyst", "user"}
 
 CORS_ORIGINS = [
+    # Local dev URLs plus the deployed frontend.
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:5174",

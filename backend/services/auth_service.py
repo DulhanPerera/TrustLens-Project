@@ -1,3 +1,8 @@
+"""
+Auth helper logic lives here.
+This file checks API keys, Google logins, and user roles.
+"""
+
 import hashlib
 import secrets
 from datetime import datetime, timezone
@@ -35,10 +40,12 @@ logger = get_logger(__name__)
 
 
 def generate_api_token() -> str:
+    # Create a long random token for external clients.
     return secrets.token_urlsafe(32)
 
 
 def hash_token(token: str) -> str:
+    # Store a hash instead of the raw token for safety.
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
@@ -62,6 +69,7 @@ def normalize_role(role: Optional[str]) -> str:
 async def verify_api_key(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
+    # Read the bearer token and match it with the saved hash in MongoDB.
     if state.mongo_api_keys_collection is None:
         raise HTTPException(status_code=503, detail="API key store is not available")
 
@@ -112,6 +120,7 @@ async def verify_admin_setup_key(x_admin_setup_key: Optional[str] = Header(defau
 
 
 async def authenticate_google_user(payload):
+    # Verify the Google token, then create or update the local user record.
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID is not configured")
 

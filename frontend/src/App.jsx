@@ -1,3 +1,8 @@
+/*
+  This is the main frontend screen.
+  It handles login, health checks, the dashboard, and the admin panel entry.
+*/
+
 import { useEffect, useMemo, useState } from 'react';
 import {
   ShieldAlert,
@@ -19,6 +24,7 @@ import AdminPanel from './pages/AdminPanel';
 const API_BASE = 'http://127.0.0.1:8000';
 
 function mapBackendTransactionToUI(doc) {
+  // Shape backend data into one format the UI can use everywhere.
   const createdAt = doc.created_at ? new Date(doc.created_at) : new Date();
   const output = doc.output || {};
 
@@ -62,6 +68,7 @@ function DetailRow({ label, value }) {
   );
 }
 
+// Small UI pieces like these keep the main layout easier to read.
 function HealthStatusItem({ label, ok, loading }) {
   let dotClass =
     'w-2.5 h-2.5 rounded-full shadow-[0_0_12px_rgba(148,163,184,0.5)] bg-slate-400';
@@ -166,10 +173,12 @@ export default function App() {
   );
 
   const latestTx = useMemo(() => {
+    // Keep the newest transaction ready for the summary cards.
     return history.length > 0 ? history[0] : null;
   }, [history]);
 
   const loadHealth = async () => {
+    // Show backend status on the sign-in screen.
     setHealthError('');
 
     try {
@@ -190,6 +199,7 @@ export default function App() {
   };
 
   const loadTransactions = async () => {
+    // Pull saved transaction history after a user signs in.
     setLoadingLogs(true);
     setLogsError('');
 
@@ -231,6 +241,7 @@ export default function App() {
   }, [user, canAccessAdmin, activeTab]);
 
   useEffect(() => {
+    // Keep health data fresh while nobody is signed in.
     if (!user) {
       setHealthLoading(true);
       loadHealth();
@@ -244,6 +255,7 @@ export default function App() {
   }, [user]);
 
   const openTransactionDetails = async (tx) => {
+    // Load the full record when a user opens a saved transaction.
     if (!tx?.mongo_id) {
       setSelectedTx(tx);
       return;
@@ -277,6 +289,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    // Clear the saved session and send the user back to the main screen.
     localStorage.removeItem('trustlens_user');
     setUser(null);
     setHistory([]);

@@ -1,3 +1,6 @@
+// Shared frontend API helpers live here.
+// Each function wraps one backend call used by the admin screens.
+
 import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -12,16 +15,12 @@ const api = axios.create({
   baseURL: API_BASE_URL,
 });
 
-// -----------------------------
-// Header helpers
-// -----------------------------
+// Add the admin setup key only on routes that need it.
 const getAdminHeaders = () => ({
   'X-Admin-Setup-Key': ADMIN_SETUP_KEY,
 });
 
-// -----------------------------
-// User management
-// -----------------------------
+// User actions
 export const updateUserRole = async (userId, role) => {
   try {
     const response = await api.patch(`/users/${userId}/role`, { role });
@@ -32,9 +31,7 @@ export const updateUserRole = async (userId, role) => {
   }
 };
 
-// -----------------------------
-// Transaction / analyst actions
-// -----------------------------
+// Transaction and analyst actions
 export const markTransactionLegitimate = async (mongoId) => {
   try {
     const response = await api.patch(`/transactions/${mongoId}/mark-legitimate`);
@@ -55,9 +52,7 @@ export const saveAnalystNote = async (mongoId, note) => {
   }
 };
 
-// -----------------------------
 // System settings
-// -----------------------------
 export const getSystemSettings = async () => {
   try {
     const response = await api.get('/settings');
@@ -78,9 +73,7 @@ export const updateSystemSettings = async (settings) => {
   }
 };
 
-// -----------------------------
 // Activity logs
-// -----------------------------
 export const getActivityLogs = async (limit = 50) => {
   try {
     const response = await api.get(`/activity-logs?limit=${limit}`);
@@ -91,9 +84,7 @@ export const getActivityLogs = async (limit = 50) => {
   }
 };
 
-// -----------------------------
-// API key management
-// -----------------------------
+// API key actions
 export const createApiKey = async (clientName) => {
   try {
     const response = await api.post(

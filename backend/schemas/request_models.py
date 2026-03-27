@@ -1,9 +1,15 @@
+"""
+Request shapes live here.
+These models make sure the API gets the fields it expects.
+"""
+
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
 
 class Transaction(BaseModel):
+    # One transaction has 30 total inputs: Time, 28 V values, and Amount.
     transaction_id: Optional[str] = None
     Time: float
     V_features: List[float] = Field(..., min_items=28, max_items=28)
@@ -13,6 +19,7 @@ class Transaction(BaseModel):
 
 
 class BatchRequest(BaseModel):
+    # Batch mode is meant for larger client uploads.
     transactions: List[Transaction] = Field(..., min_items=50, max_items=500)
     include_xai: bool = False
     top_k: int = Field(4, ge=1, le=15)

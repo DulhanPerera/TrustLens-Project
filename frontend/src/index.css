@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
-/* Vite default styles often interfere with Tailwind layouts.
-  We reset these to ensure the dashboard fills the screen.
+/* Global app styles live here.
+   These resets make the dashboard fill the page cleanly.
 */
 
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  background-color: #f8fafc; /* Light slate background for the dashboard */
+  background-color: #f8fafc; /* Soft page color for the dashboard */
 }
 
 body {
@@ -20,7 +20,7 @@ body {
   height: 100%;
 }
 
-/* Optional: Custom scrollbar for your Live Alert Feed */
+/* Small scrollbar styles keep long panels looking cleaner. */
 ::-webkit-scrollbar {
   width: 6px;
 }

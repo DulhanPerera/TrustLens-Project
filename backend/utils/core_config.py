@@ -1,3 +1,8 @@
+"""
+This file reads the backend config file.
+It gives the rest of the app one simple place to get paths from.
+"""
+
 import configparser
 import os
 from pathlib import Path
@@ -5,6 +10,7 @@ from typing import List, Optional
 
 
 class CoreConfig:
+    # Keep one shared config object so we do not reread the file everywhere.
     _instance = None
 
     def __new__(cls):
@@ -30,6 +36,7 @@ class CoreConfig:
         default: Path,
         env_name: Optional[str] = None,
     ) -> Path:
+        # Let env vars override the config file when needed.
         env_name = env_name or option.upper()
         raw_value = os.getenv(env_name) or self.config.get(section, option, fallback=str(default))
         candidate = Path(raw_value).expanduser()

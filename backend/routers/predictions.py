@@ -1,3 +1,8 @@
+"""
+Prediction routes live here.
+They run single checks, batch checks, and report generation.
+"""
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 try:
@@ -43,6 +48,7 @@ logger = get_logger(__name__)
 
 
 def _ensure_models_ready():
+    # Stop requests early if the models did not load on startup.
     if state.mlp_model is None or state.ae_model is None or state.scaler is None:
         raise HTTPException(status_code=503, detail=model_not_ready_message())
 
@@ -54,6 +60,7 @@ async def predict(
     request: Request,
     client=Depends(verify_api_key),
 ):
+    # Run the main fraud check for one transaction.
     _ensure_models_ready()
 
     try:
@@ -123,6 +130,7 @@ async def predict_batch(
     request: Request,
     client=Depends(verify_api_key),
 ):
+    # Run many transactions in one request for external systems.
     _ensure_models_ready()
 
     try:
@@ -165,6 +173,7 @@ async def report(
     request: Request,
     client=Depends(verify_api_key),
 ):
+    # Build a more detailed report card for one transaction.
     _ensure_models_ready()
 
     try:

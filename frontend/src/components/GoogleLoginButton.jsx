@@ -1,3 +1,8 @@
+/*
+  This wraps the Google sign-in button.
+  It sends the Google token to the backend and saves the user session.
+*/
+
 import { useEffect, useRef } from 'react';
 
 const GOOGLE_CLIENT_ID =
@@ -13,6 +18,7 @@ export default function GoogleLoginButton({
   const buttonRef = useRef(null);
 
   useEffect(() => {
+    // Rebuild the Google button any time its mode or text changes.
     if (!window.google || !buttonRef.current) return;
 
     buttonRef.current.innerHTML = '';
@@ -41,6 +47,7 @@ export default function GoogleLoginButton({
             login_type: data.login_type || loginType,
           };
 
+          // Keep the signed-in user in local storage for page reloads.
           localStorage.setItem('trustlens_user', JSON.stringify(userPayload));
           onLoginSuccess?.(userPayload);
         } catch (error) {

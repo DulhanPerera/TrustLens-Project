@@ -1,9 +1,6 @@
 """
-TrustLens FastAPI API
-(MLP + Autoencoder + optional SHAP + MongoDB + Google Auth + Role-Based Access + API Key Management + .env)
-
-Run from `backend/`:
-  uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+This file starts the FastAPI app.
+It wires up logging, MongoDB, the ML models, and all API routes.
 """
 
 import os
@@ -42,9 +39,11 @@ setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Load the things the app needs before requests start coming in.
     await init_mongo()
     load_assets()
     yield
+    # Close open connections when the app shuts down.
     await close_mongo()
 
 
@@ -56,6 +55,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
+    # Let the frontend call this API from the allowed app URLs.
     allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],

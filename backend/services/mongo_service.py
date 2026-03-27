@@ -1,3 +1,8 @@
+"""
+MongoDB helper logic lives here.
+This file saves records, cleans data, and opens the database connection.
+"""
+
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -39,6 +44,7 @@ logger = get_logger(__name__)
 
 
 def sanitize_for_mongo(obj: Any) -> Any:
+    # Convert numpy values into normal Python values before saving.
     if isinstance(obj, dict):
         return {k: sanitize_for_mongo(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -62,6 +68,7 @@ def sanitize_for_mongo(obj: Any) -> Any:
 
 
 def serialize_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    # Turn ObjectId and datetime values into JSON-friendly values.
     if doc is None:
         return doc
 
@@ -118,6 +125,7 @@ async def save_prediction_to_mongo(
     response_payload: Dict[str, Any],
     client_name: str = "unknown",
 ) -> Optional[str]:
+    # Keep the original input and the model output together in one record.
     if state.mongo_tx_collection is None:
         return None
 
@@ -191,6 +199,7 @@ async def save_batch_to_mongo(
 
 async def init_mongo():
     try:
+        # Open the database and cache the collections the app uses often.
         state.mongo_client = AsyncMongoClient(
             MONGO_URI,
             server_api=ServerApi("1"),

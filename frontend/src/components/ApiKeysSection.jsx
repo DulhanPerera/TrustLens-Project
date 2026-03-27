@@ -1,3 +1,8 @@
+/*
+  This section lets admins create API keys and watch request logs.
+  It keeps the key tools together in one place.
+*/
+
 import { useState } from 'react';
 import {
   createApiKey,
@@ -8,6 +13,7 @@ import {
 } from '../api';
 
 function formatDate(value) {
+  // Use one simple date format across the tables and modal.
   if (!value) return '-';
   try {
     return new Date(value).toLocaleString();
@@ -44,6 +50,7 @@ export default function ApiKeysSection({
   const [tokenModal, setTokenModal] = useState(null);
 
   const loadApiKeysOnly = async () => {
+    // Refresh just the key list after key changes.
     try {
       const data = await getApiKeys(50);
       setApiKeys(data.items || []);
@@ -54,6 +61,7 @@ export default function ApiKeysSection({
   };
 
   const loadRequestLogsOnly = async () => {
+    // Refresh just the request log table when needed.
     try {
       const data = await getRequestLogs(50);
       setRequestLogs(data.items || []);
@@ -64,6 +72,7 @@ export default function ApiKeysSection({
   };
 
   const loadActivityLogsOnly = async () => {
+    // Keep the activity feed up to date after admin actions.
     try {
       const data = await getActivityLogs(50);
       setActivityLogs(data.items || []);
@@ -73,6 +82,7 @@ export default function ApiKeysSection({
   };
 
   const handleCreateApiKey = async () => {
+    // Create a new key and show the token once in the modal.
     if (!clientName.trim()) {
       alert('Please enter a client name.');
       return;
@@ -94,6 +104,7 @@ export default function ApiKeysSection({
   };
 
   const handleToggleApiKeyStatus = async (apiKeyId, currentStatus) => {
+    // Toggle between active and inactive without reloading the page.
     const nextStatus = currentStatus === 'active' ? 'inactive' : 'active';
     setApiKeyStatusSavingId(apiKeyId);
 
@@ -116,6 +127,7 @@ export default function ApiKeysSection({
   };
 
   const copyTokenToClipboard = async () => {
+    // Make it easy to hand the new token to the client team.
     if (!tokenModal?.token) return;
 
     try {

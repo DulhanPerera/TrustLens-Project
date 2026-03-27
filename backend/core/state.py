@@ -1,9 +1,15 @@
+"""
+This file keeps shared runtime values for the backend.
+The app stores loaded models and Mongo collections here.
+"""
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class RuntimeState:
+    # These values get filled in when the app starts.
     mlp_model: Optional[Any] = None
     ae_model: Optional[Any] = None
     scaler: Optional[Any] = None
@@ -24,5 +30,5 @@ class RuntimeState:
     mongo_api_keys_collection: Optional[Any] = None
     mongo_request_log_collection: Optional[Any] = None
 
-
+# One shared state object is enough for the whole backend process.
 state = RuntimeState()

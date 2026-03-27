@@ -1,3 +1,8 @@
+"""
+Auth routes live here.
+They handle Google sign-in and simple user role updates.
+"""
+
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException
 
@@ -21,6 +26,7 @@ logger = get_logger(__name__)
 
 @router.post("/auth/google")
 async def auth_google(payload: GoogleAuthRequest):
+    # Pass the Google token to the auth service and return the result.
     return await authenticate_google_user(payload)
 
 
@@ -38,6 +44,7 @@ async def get_users(limit: int = 20):
 
 @router.patch("/users/{user_id}/role")
 async def update_user_role(user_id: str, payload: UpdateUserRoleRequest):
+    # Keep roles limited to the allowed values from settings.
     if state.mongo_user_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB user collection is not available")
 

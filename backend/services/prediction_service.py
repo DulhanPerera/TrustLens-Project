@@ -1,3 +1,8 @@
+"""
+Prediction helper logic lives here.
+This file loads the models, scores transactions, and builds XAI text.
+"""
+
 import json
 import os
 from datetime import datetime
@@ -49,6 +54,7 @@ logger = get_logger(__name__)
 
 
 def first_existing(primary, alts) -> Optional[Any]:
+    # Try the main file first, then check old backup names.
     if primary.exists():
         return primary
     for path in alts:
@@ -58,6 +64,7 @@ def first_existing(primary, alts) -> Optional[Any]:
 
 
 def to_prob(pred: np.ndarray) -> float:
+    # Some models return logits, so turn them into a clean probability.
     pred = np.array(pred)
 
     if pred.ndim == 2 and pred.shape[1] == 2:
@@ -78,6 +85,7 @@ def recon_error_mse(x_scaled: np.ndarray, x_hat: np.ndarray) -> np.ndarray:
 
 
 def anomaly_score_fallback(re_err: float, thr_re: float) -> float:
+    # Turn reconstruction error into a simple 0 to 1 risk-like score.
     thr_re = float(max(thr_re, 1e-12))
     sigma = 0.20 * thr_re
     z = (re_err - thr_re) / max(sigma, 1e-12)
@@ -122,6 +130,7 @@ def model_not_ready_message() -> str:
 
 
 def load_assets():
+    # Load models and helper files once when the app starts.
     state.last_init_error = None
     state.shap_explainer = None
 
@@ -239,6 +248,7 @@ def xai_shap(
     top_k: int,
     output_is_fraud: bool,
 ) -> List[Dict[str, Any]]:
+    # Pull out the strongest SHAP signals for one transaction.
     if state.shap_explainer is None:
         return []
 
@@ -274,6 +284,7 @@ def xai_shap(
 
 
 def xai_recon_pf(x_scaled_row: np.ndarray, x_hat_row: np.ndarray, top_k: int) -> List[Dict[str, Any]]:
+    # Show which features had the biggest autoencoder error.
     errors = per_feature_sq_error(x_scaled_row, x_hat_row)
     order = np.argsort(errors)[::-1][:top_k]
     items = []
@@ -294,6 +305,7 @@ def build_text_reason(
     amount_value: float,
     risk_score_pct: float,
 ) -> str:
+    # Build a plain-English summary for the UI and reports.
     risk = risk_level(risk_score_pct)
 
     shap_labels = join_labels([feature_label(item["feature"]) for item in shap_data[:3]])
@@ -313,6 +325,7 @@ def build_text_reason(
 
 
 def _predict_scores(x_raw: np.ndarray) -> Tuple[np.ndarray, float, float, np.ndarray, float, float, float, float, float, bool]:
+    # Run both models and return the raw numbers the endpoints need.
     x_scaled = state.scaler.transform(x_raw).astype(np.float32)
 
     try:
@@ -352,6 +365,7 @@ def _predict_scores(x_raw: np.ndarray) -> Tuple[np.ndarray, float, float, np.nda
 
 
 def build_prediction_response(tx, client_name: str) -> Dict[str, Any]:
+    # Build the saved response for one transaction.
     x_raw = np.array([[tx.Time] + tx.V_features + [tx.Amount]], dtype=np.float32)
     if x_raw.shape != (1, 30):
         raise ValueError("Input must be 30 features: Time + 28 V-features + Amount")
@@ -419,6 +433,7 @@ def build_prediction_response(tx, client_name: str) -> Dict[str, Any]:
 
 
 def build_batch_prediction_response(req, client_name: str) -> Dict[str, Any]:
+    # Score many rows at once, then sort them by highest risk first.
     txs = req.transactions
     do_xai = bool(req.include_xai)
     top_k = int(req.top_k)

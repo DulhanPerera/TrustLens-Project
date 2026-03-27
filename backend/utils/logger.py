@@ -1,3 +1,8 @@
+"""
+This file sets up app logging.
+It makes sure logs go to the console and the audit file.
+"""
+
 import logging
 import logging.config
 from pathlib import Path
@@ -25,6 +30,7 @@ def setup_logging() -> logging.Logger:
     global _IS_CONFIGURED
 
     with _CONFIG_LOCK:
+        # Only configure logging once for the whole process.
         if _IS_CONFIGURED:
             return logging.getLogger("trustlens")
 
@@ -42,6 +48,7 @@ def setup_logging() -> logging.Logger:
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
+    # Keep logger names under the trustlens.* namespace.
     setup_logging()
 
     if not name:

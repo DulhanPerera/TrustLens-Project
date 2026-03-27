@@ -1,3 +1,8 @@
+"""
+Admin routes live here.
+They handle health info, saved data, notes, and small admin actions.
+"""
+
 from datetime import datetime
 
 from bson import ObjectId
@@ -46,6 +51,7 @@ router = APIRouter()
 
 @router.patch("/transactions/{tx_id}/mark-legitimate")
 async def mark_legitimate(tx_id: str):
+    # Let an analyst override a flagged transaction.
     if state.mongo_tx_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB not connected")
 
@@ -78,6 +84,7 @@ async def mark_legitimate(tx_id: str):
 
 @router.post("/transactions/{tx_id}/note")
 async def add_analyst_note(tx_id: str, payload: AnalystNoteRequest):
+    # Save a quick note directly on the transaction record.
     if state.mongo_tx_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB not connected")
 
@@ -156,6 +163,7 @@ async def get_activity_logs(limit: int = 50):
 
 @router.get("/health")
 def health():
+    # Return a simple snapshot of what parts of the system are ready.
     return build_health_payload(
         mongo_config={
             "db_name": MONGO_DB_NAME,

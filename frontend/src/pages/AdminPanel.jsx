@@ -1,3 +1,8 @@
+/*
+  This is the admin area for TrustLens.
+  It loads users, transactions, reports, settings, and API key tools.
+*/
+
 import { useEffect, useMemo, useState } from 'react';
 import {
   updateUserRole as updateUserRoleApi,
@@ -13,6 +18,7 @@ import ApiKeysSection from '../components/ApiKeysSection';
 
 const API_BASE = 'http://127.0.0.1:8000';
 
+// Small UI pieces like these keep the main panel easier to scan.
 function KPIBox({ title, value }) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
@@ -133,6 +139,7 @@ export default function AdminPanel() {
   const [settingsSaving, setSettingsSaving] = useState(false);
 
   const loadActivityLogsOnly = async () => {
+    // Refresh just the activity list after a quick admin action.
     try {
       const data = await getActivityLogs(50);
       setActivityLogs(data.items || []);
@@ -142,6 +149,7 @@ export default function AdminPanel() {
   };
 
   const loadAdminData = async () => {
+    // Load the full admin screen in one go so the data stays in sync.
     setLoading(true);
     setError('');
 
@@ -203,6 +211,7 @@ export default function AdminPanel() {
   };
 
   const handleUpdateUserRole = async (userId, newRole) => {
+    // Update the role in the backend, then patch the local table.
     setRoleSavingUserId(userId);
 
     try {
@@ -224,6 +233,7 @@ export default function AdminPanel() {
   };
 
   const openTransactionDetails = async (tx) => {
+    // Pull the full transaction record before opening the side panel.
     if (!tx?._id) return;
 
     setDetailLoading(true);
@@ -263,6 +273,7 @@ export default function AdminPanel() {
   };
 
   const openReportDetails = async (report) => {
+    // Pull the full report record before opening the report panel.
     if (!report?._id) return;
 
     setReportLoading(true);
@@ -297,6 +308,7 @@ export default function AdminPanel() {
   };
 
   const handleMarkTransactionLegitimate = async () => {
+    // Let an analyst flip a flagged result to a legit one.
     if (!selectedTx?._id) return;
 
     setMarkingLegit(true);
@@ -321,6 +333,7 @@ export default function AdminPanel() {
   };
 
   const handleAddAnalystNote = async () => {
+    // Save the note and update the open transaction right away.
     if (!selectedTx?._id || !noteText.trim()) return;
 
     setNoteSaving(true);
@@ -346,6 +359,7 @@ export default function AdminPanel() {
   };
 
   const handleSaveSettings = async () => {
+    // Save the small settings form one field at a time.
     setSettingsSaving(true);
 
     try {
@@ -388,6 +402,7 @@ export default function AdminPanel() {
   };
 
   useEffect(() => {
+    // Load admin data on first render.
     loadAdminData();
   }, []);
 
@@ -406,6 +421,7 @@ export default function AdminPanel() {
   }, [transactions]);
 
   const filteredTransactions = useMemo(() => {
+    // Filter on the client so the table feels faster to use.
     let items = [...transactions];
 
     if (txFilter === 'fraud') {

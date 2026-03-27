@@ -1,3 +1,8 @@
+"""
+API key routes live here.
+They let admins create keys, view them, and change their status.
+"""
+
 from datetime import timedelta
 
 from bson import ObjectId
@@ -37,6 +42,7 @@ async def create_api_key(
     payload: ApiKeyCreateRequest,
     _admin_ok: bool = Depends(verify_admin_setup_key),
 ):
+    # Only the hash is stored, so the raw token is shown once here.
     if state.mongo_api_keys_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB API key collection is not available")
 
@@ -122,6 +128,7 @@ async def update_api_key_status(
     payload: ApiKeyStatusUpdateRequest,
     _admin_ok: bool = Depends(verify_admin_setup_key),
 ):
+    # This lets admins quickly pause or re-enable a client key.
     if state.mongo_api_keys_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB API key collection is not available")
 
