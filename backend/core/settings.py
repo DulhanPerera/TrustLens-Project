@@ -8,15 +8,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 try:
     from utils.core_config import get_core_config
 except ImportError:
     from backend.utils.core_config import get_core_config
 
-
-BASE_DIR = Path(__file__).resolve().parent.parent
 core_config = get_core_config()
 
 MLP_MODEL_PATH = core_config.mlp_model_path

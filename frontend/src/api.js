@@ -3,7 +3,8 @@
 
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000';
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'https://trustlens-project-production.up.railway.app';
 
 // For Vite:
 // add this to your frontend .env file:

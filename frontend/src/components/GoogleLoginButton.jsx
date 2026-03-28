@@ -4,10 +4,10 @@
 */
 
 import { useEffect, useRef } from 'react';
+import { API_BASE_URL } from '../api';
 
 const GOOGLE_CLIENT_ID =
   '729857577095-k5p6nbu7s8dnj8kh8sd6pvfehuiji4fp.apps.googleusercontent.com';
-const API_BASE = 'http://127.0.0.1:8000';
 
 export default function GoogleLoginButton({
   onLoginSuccess,
@@ -27,7 +27,7 @@ export default function GoogleLoginButton({
       client_id: GOOGLE_CLIENT_ID,
       callback: async (response) => {
         try {
-          const res = await fetch(`${API_BASE}/auth/google`, {
+          const res = await fetch(`${API_BASE_URL}/auth/google`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

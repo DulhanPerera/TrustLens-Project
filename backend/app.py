@@ -5,10 +5,11 @@ It wires up logging, MongoDB, the ML models, and all API routes.
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 from fastapi import FastAPI

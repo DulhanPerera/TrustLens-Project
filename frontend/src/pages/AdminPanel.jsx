@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  API_BASE_URL,
   updateUserRole as updateUserRoleApi,
   markTransactionLegitimate as markTransactionLegitimateApi,
   saveAnalystNote,
@@ -15,8 +16,6 @@ import {
   getRequestLogs,
 } from '../api';
 import ApiKeysSection from '../components/ApiKeysSection';
-
-const API_BASE = 'http://127.0.0.1:8000';
 
 // Small UI pieces like these keep the main panel easier to scan.
 function KPIBox({ title, value }) {
@@ -164,10 +163,10 @@ export default function AdminPanel() {
         apiKeysData,
         requestLogsData,
       ] = await Promise.all([
-        fetch(`${API_BASE}/users?limit=50`),
-        fetch(`${API_BASE}/transactions?limit=50`),
-        fetch(`${API_BASE}/reports?limit=50`),
-        fetch(`${API_BASE}/health`),
+        fetch(`${API_BASE_URL}/users?limit=50`),
+        fetch(`${API_BASE_URL}/transactions?limit=50`),
+        fetch(`${API_BASE_URL}/reports?limit=50`),
+        fetch(`${API_BASE_URL}/health`),
         getActivityLogs(50),
         getSystemSettings(),
         getApiKeys(50),
@@ -242,7 +241,7 @@ export default function AdminPanel() {
     setNoteText('');
 
     try {
-      const res = await fetch(`${API_BASE}/transactions/${tx._id}`);
+      const res = await fetch(`${API_BASE_URL}/transactions/${tx._id}`);
       if (!res.ok) {
         throw new Error('Failed to load transaction');
       }
@@ -281,7 +280,7 @@ export default function AdminPanel() {
     setSelectedReport(null);
 
     try {
-      const res = await fetch(`${API_BASE}/reports/${report._id}`);
+      const res = await fetch(`${API_BASE_URL}/reports/${report._id}`);
       if (!res.ok) {
         throw new Error('Failed to load report');
       }

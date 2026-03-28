@@ -18,10 +18,9 @@ import {
   AlertTriangle,
   Gauge,
 } from 'lucide-react';
+import { API_BASE_URL } from './api';
 import GoogleLoginButton from './components/GoogleLoginButton';
 import AdminPanel from './pages/AdminPanel';
-
-const API_BASE = 'http://127.0.0.1:8000';
 
 function mapBackendTransactionToUI(doc) {
   // Shape backend data into one format the UI can use everywhere.
@@ -182,7 +181,7 @@ export default function App() {
     setHealthError('');
 
     try {
-      const res = await fetch(`${API_BASE}/health`);
+      const res = await fetch(`${API_BASE_URL}/health`);
       if (!res.ok) {
         throw new Error(`Failed to fetch health: ${res.status}`);
       }
@@ -204,7 +203,7 @@ export default function App() {
     setLogsError('');
 
     try {
-      const res = await fetch(`${API_BASE}/transactions?limit=50`);
+      const res = await fetch(`${API_BASE_URL}/transactions?limit=50`);
       if (!res.ok) {
         throw new Error(`Failed to fetch transactions: ${res.status}`);
       }
@@ -266,7 +265,7 @@ export default function App() {
     setSelectedTx(null);
 
     try {
-      const res = await fetch(`${API_BASE}/transactions/${tx.mongo_id}`);
+      const res = await fetch(`${API_BASE_URL}/transactions/${tx.mongo_id}`);
       if (!res.ok) {
         throw new Error(`Failed to fetch transaction details: ${res.status}`);
       }
