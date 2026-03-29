@@ -18,9 +18,10 @@ import {
   AlertTriangle,
   Gauge,
 } from 'lucide-react';
-import { API_BASE_URL } from './api';
+import { API_BASE_URL, buildTransactionsUrl } from './api';
 import GoogleLoginButton from './components/GoogleLoginButton';
 import AdminPanel from './pages/AdminPanel';
+import { sortTransactionsByTransactionIdDesc } from './utils/transactionSort';
 
 function mapBackendTransactionToUI(doc) {
   // Shape backend data into one format the UI can use everywhere.
@@ -203,24 +204,18 @@ export default function App() {
     setLogsError('');
 
     try {
-      const res = await fetch(`${API_BASE_URL}/transactions?limit=50`);
+      const res = await fetch(buildTransactionsUrl());
       if (!res.ok) {
         throw new Error(`Failed to fetch transactions: ${res.status}`);
       }
 
       const data = await res.json();
       const items = Array.isArray(data.items) ? data.items : [];
-      const mapped = items.map(mapBackendTransactionToUI);
-
-      mapped.sort((a, b) => {
-        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return bTime - aTime;
-      });
+      const mapped = sortTransactionsByTransactionIdDesc(items.map(mapBackendTransactionToUI));
 
       setHistory(mapped);
     } catch (error) {
-      console.error('Failed to load audit logs:', error);
+      console.error('Failed to load transaction archive:', error);
       setLogsError('Failed to load saved audit logs from backend.');
     } finally {
       setLoadingLogs(false);

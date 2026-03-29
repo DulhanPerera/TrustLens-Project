@@ -4,9 +4,11 @@ They handle health info, saved data, notes, and small admin actions.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from pymongo.collation import Collation
 
 try:
     from core.settings import (
@@ -47,6 +49,7 @@ except ImportError:
 
 
 router = APIRouter()
+TX_ID_COLLATION = Collation(locale="en", numericOrdering=True)
 
 
 @router.patch("/transactions/{tx_id}/mark-legitimate")
@@ -150,11 +153,10 @@ async def update_setting(payload: SettingUpdate):
 
 
 @router.get("/activity-logs")
-async def get_activity_logs(limit: int = 50):
+async def get_activity_logs(limit: int = Query(default=200, ge=1, le=1000)):
     if state.mongo_activity_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB not connected")
 
-    limit = max(1, min(limit, 200))
     cursor = state.mongo_activity_collection.find().sort("created_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
 
@@ -182,16 +184,26 @@ def health():
 
 
 @router.get("/transactions")
-async def get_transactions(limit: int = 20):
+async def get_transactions(
+    limit: int = Query(default=200, ge=1, le=1000),
+    sort_by: Literal["created_at", "transaction_id"] = "created_at",
+    sort_dir: Literal["asc", "desc"] = "desc",
+):
     if state.mongo_tx_collection is None:
         raise HTTPException(status_code=503, detail="MongoDB not connected")
 
-    limit = max(1, min(limit, 200))
-    cursor = (
-        state.mongo_tx_collection.find({"type": {"$ne": "predict_batch"}})
-        .sort("created_at", -1)
-        .limit(limit)
-    )
+    direction = 1 if sort_dir == "asc" else -1
+    query = {"type": {"$ne": "predict_batch"}}
+
+    if sort_by == "transaction_id":
+        cursor = (
+            state.mongo_tx_collection.find(query, collation=TX_ID_COLLATION)
+            .sort([("transaction_id", direction), ("created_at", -1)])
+            .limit(limit)
+        )
+    else:
+        cursor = state.mongo_tx_collection.find(query).sort("created_at", direction).limit(limit)
+
     docs = await cursor.to_list(length=limit)
 
     return {"count": len(docs), "items": [serialize_doc(doc) for doc in docs]}

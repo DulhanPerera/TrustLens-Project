@@ -6,6 +6,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   API_BASE_URL,
+  DEFAULT_ACTIVITY_LOG_LIMIT,
+  buildTransactionsUrl,
   updateUserRole as updateUserRoleApi,
   markTransactionLegitimate as markTransactionLegitimateApi,
   saveAnalystNote,
@@ -16,6 +18,7 @@ import {
   getRequestLogs,
 } from '../api';
 import ApiKeysSection from '../components/ApiKeysSection';
+import { sortTransactionsByTransactionIdDesc } from '../utils/transactionSort';
 
 // Small UI pieces like these keep the main panel easier to scan.
 function KPIBox({ title, value }) {
@@ -140,7 +143,7 @@ export default function AdminPanel() {
   const loadActivityLogsOnly = async () => {
     // Refresh just the activity list after a quick admin action.
     try {
-      const data = await getActivityLogs(50);
+      const data = await getActivityLogs(DEFAULT_ACTIVITY_LOG_LIMIT);
       setActivityLogs(data.items || []);
     } catch (err) {
       console.error(err);
@@ -164,10 +167,10 @@ export default function AdminPanel() {
         requestLogsData,
       ] = await Promise.all([
         fetch(`${API_BASE_URL}/users?limit=50`),
-        fetch(`${API_BASE_URL}/transactions?limit=50`),
+        fetch(buildTransactionsUrl()),
         fetch(`${API_BASE_URL}/reports?limit=50`),
         fetch(`${API_BASE_URL}/health`),
-        getActivityLogs(50),
+        getActivityLogs(DEFAULT_ACTIVITY_LOG_LIMIT),
         getSystemSettings(),
         getApiKeys(50),
         getRequestLogs(50),
@@ -183,7 +186,7 @@ export default function AdminPanel() {
       const healthData = await healthRes.json();
 
       setUsers(usersData.items || []);
-      setTransactions(txData.items || []);
+      setTransactions(sortTransactionsByTransactionIdDesc(txData.items || []));
       setReports(reportsData.items || []);
       setHealth(healthData || null);
       setActivityLogs(activityData.items || []);

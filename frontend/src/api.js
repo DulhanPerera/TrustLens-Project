@@ -5,6 +5,8 @@ import axios from 'axios';
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || 'https://trustlens-project-production.up.railway.app';
+export const DEFAULT_ACTIVITY_LOG_LIMIT = 200;
+export const DEFAULT_TRANSACTION_LIMIT = 200;
 
 // For Vite:
 // add this to your frontend .env file:
@@ -15,6 +17,20 @@ const ADMIN_SETUP_KEY = import.meta.env.VITE_ADMIN_SETUP_KEY || '';
 const api = axios.create({
   baseURL: API_BASE_URL,
 });
+
+export const buildTransactionsUrl = ({
+  limit = DEFAULT_TRANSACTION_LIMIT,
+  sortBy = 'transaction_id',
+  sortDir = 'desc',
+} = {}) => {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    sort_by: sortBy,
+    sort_dir: sortDir,
+  });
+
+  return `${API_BASE_URL}/transactions?${params.toString()}`;
+};
 
 // Add the admin setup key only on routes that need it.
 const getAdminHeaders = () => ({
@@ -75,7 +91,7 @@ export const updateSystemSettings = async (settings) => {
 };
 
 // Activity logs
-export const getActivityLogs = async (limit = 50) => {
+export const getActivityLogs = async (limit = DEFAULT_ACTIVITY_LOG_LIMIT) => {
   try {
     const response = await api.get(`/activity-logs?limit=${limit}`);
     return response.data;
