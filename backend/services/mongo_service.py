@@ -177,24 +177,78 @@ async def save_report_to_mongo(
 
 
 async def save_batch_to_mongo(
+    req,
     batch_payload: Dict[str, Any],
     client_name: str = "unknown",
 ) -> Optional[str]:
     if state.mongo_tx_collection is None:
         return None
 
+    created_at = datetime.utcnow()
+    results = sanitize_for_mongo(batch_payload.get("results", []))
+    thresholds = sanitize_for_mongo(batch_payload.get("thresholds", {}))
+    fraud_count = sum(1 for item in results if item.get("is_fraud") is True)
+    approved_count = sum(1 for item in results if item.get("is_fraud") is False)
+
     doc = {
         "type": "predict_batch",
         "client_name": client_name,
         "count": int(batch_payload.get("count", 0)),
+        "fraud_count": fraud_count,
+        "approved_count": approved_count,
         "sorted_by": batch_payload.get("sorted_by"),
-        "thresholds": sanitize_for_mongo(batch_payload.get("thresholds", {})),
-        "results": sanitize_for_mongo(batch_payload.get("results", [])),
-        "created_at": datetime.utcnow(),
+        "thresholds": thresholds,
+        "results": results,
+        "created_at": created_at,
     }
 
     result = await state.mongo_tx_collection.insert_one(doc)
-    return str(result.inserted_id)
+    batch_mongo_id = str(result.inserted_id)
+
+    item_docs = []
+    txs = list(getattr(req, "transactions", []) or [])
+
+    for item in results:
+        tx_index = item.get("index")
+        tx = txs[tx_index] if isinstance(tx_index, int) and 0 <= tx_index < len(txs) else None
+        input_payload = {
+            "Time": getattr(tx, "Time", None),
+            "V_features": list(getattr(tx, "V_features", []) or []),
+            "Amount": getattr(tx, "Amount", None),
+        }
+
+        item_output = dict(item)
+        item_output["thresholds"] = thresholds
+        item_output["batch_mongo_id"] = batch_mongo_id
+
+        item_docs.append(
+            {
+                "type": "predict_batch_item",
+                "client_name": client_name,
+                "batch_mongo_id": batch_mongo_id,
+                "batch_index": tx_index if isinstance(tx_index, int) else None,
+                "transaction_id": getattr(tx, "transaction_id", None) or item.get("transaction_id"),
+                "input": sanitize_for_mongo(input_payload),
+                "output": sanitize_for_mongo(item_output),
+                "is_fraud": item.get("is_fraud"),
+                "status": item.get("status"),
+                "risk_score": item.get("risk_score"),
+                "created_at": created_at,
+            }
+        )
+
+    if item_docs:
+        insert_many_result = await state.mongo_tx_collection.insert_many(item_docs)
+        await state.mongo_tx_collection.update_one(
+            {"_id": result.inserted_id},
+            {
+                "$set": {
+                    "item_ids": [str(item_id) for item_id in insert_many_result.inserted_ids],
+                }
+            },
+        )
+
+    return batch_mongo_id
 
 
 async def init_mongo():
@@ -219,6 +273,8 @@ async def init_mongo():
         await state.mongo_tx_collection.create_index("status")
         await state.mongo_tx_collection.create_index("is_fraud")
         await state.mongo_tx_collection.create_index("transaction_id")
+        await state.mongo_tx_collection.create_index("type")
+        await state.mongo_tx_collection.create_index("batch_mongo_id")
 
         await state.mongo_report_collection.create_index("created_at")
         await state.mongo_report_collection.create_index("decision")

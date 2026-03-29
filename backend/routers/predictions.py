@@ -135,14 +135,37 @@ async def predict_batch(
 
     try:
         batch_response = build_batch_prediction_response(req, client_name=client["client_name"])
+        fraud_count = sum(1 for item in batch_response["results"] if item.get("is_fraud") is True)
+        approved_count = sum(1 for item in batch_response["results"] if item.get("is_fraud") is False)
 
-        mongo_id = await save_batch_to_mongo(batch_response, client_name=client["client_name"])
+        logger.info(
+            f"predict_batch: client={client['client_name']} count={len(batch_response['results'])} "
+            f"blocked={fraud_count} approved={approved_count}"
+        )
+
+        for item in batch_response["results"]:
+            logger.info(
+                f"predict_batch_item: client={client['client_name']} "
+                f"tx_id={item.get('transaction_id')} "
+                f"p_fraud={float(item.get('fraud_prob', 0.0)):.6f} "
+                f"re={float(item.get('recon_error', 0.0)):.6f} "
+                f"anom={float(item.get('anomaly_score', 0.0)):.6f} "
+                f"combined={float(item.get('combined_score', 0.0)):.6f} "
+                f"is_fraud={item.get('is_fraud')}"
+            )
+
+        mongo_id = await save_batch_to_mongo(req, batch_response, client_name=client["client_name"])
         batch_response["mongo_id"] = mongo_id
 
         await log_activity(
             action="batch_prediction",
             actor=client["client_name"],
-            details={"count": len(batch_response["results"]), "mongo_id": mongo_id},
+            details={
+                "count": len(batch_response["results"]),
+                "fraud_count": fraud_count,
+                "approved_count": approved_count,
+                "mongo_id": mongo_id,
+            },
         )
 
         await log_request_event(
@@ -150,7 +173,12 @@ async def predict_batch(
             endpoint=str(request.url.path),
             method=request.method,
             status="success",
-            details={"count": len(batch_response["results"]), "mongo_id": mongo_id},
+            details={
+                "count": len(batch_response["results"]),
+                "fraud_count": fraud_count,
+                "approved_count": approved_count,
+                "mongo_id": mongo_id,
+            },
         )
 
         return batch_response

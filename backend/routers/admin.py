@@ -187,7 +187,11 @@ async def get_transactions(limit: int = 20):
         raise HTTPException(status_code=503, detail="MongoDB not connected")
 
     limit = max(1, min(limit, 200))
-    cursor = state.mongo_tx_collection.find().sort("created_at", -1).limit(limit)
+    cursor = (
+        state.mongo_tx_collection.find({"type": {"$ne": "predict_batch"}})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
     docs = await cursor.to_list(length=limit)
 
     return {"count": len(docs), "items": [serialize_doc(doc) for doc in docs]}
